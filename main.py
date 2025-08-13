@@ -1,12 +1,8 @@
 import cv2
-import numpy as np
-import json
 import base64
 import os
-import ollama
 from pydantic import BaseModel
 from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 from typing import List
 from PIL import Image
@@ -189,21 +185,21 @@ class ArbeitsblattSolver():
 
             prompt = f"""Du siehst ein Arbeitsblatt mit {len(self.freie_stellen)} nummerierten Lücken (rote/grüne Boxen).
 
-AUFGABE: Analysiere das Bild und fülle jede Lücke mit dem passenden Wort aus.
+AUFGABE: Analysiere das Arbeitsblatt und die Aufgabe genau und löse diese.
 
 Gehe so vor:
-1. Schaue dir den Text um jede Lücke an
+1. Schaue dir den Text an
 2. Verstehe den Kontext und das Thema  
-3. Suche nach Wortlisten oder Hinweisen im Bild
-4. Gib für jede Lücke das passende Wort zurück
+3. Suche nach Hinweisen im Bild
+4. Gib für jede Box die passende Lösung zurück
 
 Achte auf:
 - Grammatik und Satzstruktur
-- Kontext des umgebenden Textes
-- Verfügbare Wörter oder Hinweise im Arbeitsblatt
+- Kontext des Textes
+- Verfügbare Hinweise im Arbeitsblatt
 - Logischen Sinnzusammenhang
 
-Gib für jede nummerierte Lücke das passende Wort zurück."""
+Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht Teil der Aufgabe ist oder nicht ausgefüllt werden muss antworte einfach mit none."""
 
             # Exakt wie in test3
             response = self.client.models.generate_content(
