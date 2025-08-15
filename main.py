@@ -6,6 +6,8 @@ from google import genai
 from dotenv import load_dotenv
 from typing import List
 from PIL import Image
+import cv2
+import numpy as np
 
 # Pydantic Models außerhalb der Klasse definieren
 class Pair(BaseModel):
@@ -203,7 +205,7 @@ Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht 
 
             # Exakt wie in test3
             response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=self.model_name,
                 contents=[image, prompt],
                 config={
                     "response_mime_type": "application/json",
@@ -354,12 +356,13 @@ Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht 
 
 # Hauptprogramm
 def main():
-    solver = ArbeitsblattSolver('arbeitsblatt.png')
+    path = input("📂 Bitte den Pfad zum Arbeitsblatt-Bild eingeben: ").strip()
+    solver = ArbeitsblattSolver(path)
     
     print("🔍 Lade Bild und erkenne Lücken...")
     try:
         original = solver.load_image()
-        gaps = solver.detect_gaps()
+        gaps = solver.detect_gaps(original)
         
         print(f"✅ {len(gaps)} Lücken gefunden!")
         
