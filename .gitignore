@@ -3,3 +3,5 @@
 test*
 .env
 debug_outputs/
+dataset/
+*.pt
