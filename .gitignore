@@ -6,3 +6,4 @@ debug_outputs/
 dataset/
 *.pt
 raw_images/
+arbeitsblatt_yolo/

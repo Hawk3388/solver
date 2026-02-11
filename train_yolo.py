@@ -1,6 +1,6 @@
 """
-YOLO Training von Scratch für Arbeitsblatt Freie Stellen Erkennung
-Trainiert YOLOv11m komplett neu (nicht Transfer Learning)
+YOLO Training mit Transfer Learning für Arbeitsblatt Freie Stellen Erkennung
+Trainiert YOLOv11m mit vortrainierten Gewichten (nur eine Klasse: freie_stelle)
 """
 
 from ultralytics import YOLO
@@ -43,7 +43,7 @@ def train_from_scratch(
         dataset_info = yaml.safe_load(f)
     
     print("=" * 70)
-    print("🚀 YOLO Training VON SCRATCH")
+    print("🚀 YOLO Training mit Transfer Learning")
     print("=" * 70)
     print(f"📦 Modell: YOLOv11{model_size}")
     print(f"📁 Dataset: {data_yaml}")
@@ -55,30 +55,30 @@ def train_from_scratch(
     print(f"🖥️  Device: {'GPU ' + str(device) if device != 'cpu' else 'CPU'}")
     print("=" * 70)
     
-    # Warnung: Training von Scratch
-    print("\n⚠️  ACHTUNG: Training von Scratch (kein Transfer Learning)!")
-    print("   - Benötigt mehr Daten (idealerweise 500+ Bilder)")
-    print("   - Dauert länger")
-    print("   - Könnte schlechtere Ergebnisse liefern als Transfer Learning")
-    print("   - Empfehlung: Mindestens 100 Bilder mit guten Annotationen\n")
+    # Info: Transfer Learning
+    print("\n✅ Transfer Learning (vortrainiertes Modell wird angepasst)")
+    print("   - Benötigt weniger Daten (50-100+ Bilder reichen)")
+    print("   - Schnelleres Training")
+    print("   - Bessere Ergebnisse als Training von Scratch")
+    print("   - Vortrainierte Features werden für deine Klasse angepasst\n")
     
     response = input("Fortfahren? (j/n): ").lower()
     if response != 'j':
         print("❌ Training abgebrochen")
         return
     
-    # Modell von Scratch initialisieren (YAML Config, kein .pt)
-    model_config = f'yolo26{model_size}.yaml'
-    print(f"\n📥 Initialisiere Modell von Scratch: {model_config}")
+    # Vortrainiertes Modell laden (Transfer Learning)
+    model_config = f'yolo26{model_size}.pt'
+    print(f"\n📥 Lade vortrainiertes Modell: {model_config}")
     
     try:
         model = YOLO(model_config)
     except Exception as e:
-        print(f"❌ Fehler beim Laden der Modell-Config: {e}")
-        print(f"💡 Stelle sicher, dass 'yolo26{model_size}.yaml' verfügbar ist")
+        print(f"❌ Fehler beim Laden des Modells: {e}")
+        print(f"💡 Das Modell wird automatisch heruntergeladen beim ersten Mal")
         return
     
-    print("✅ Modell initialisiert (komplett zufällige Gewichte)")
+    print("✅ Vortrainiertes Modell geladen (wird für deine Klasse angepasst)")
     
     # Training starten
     print(f"\n🎯 Starte Training... (Das kann mehrere Stunden dauern)\n")
@@ -128,7 +128,7 @@ def train_from_scratch(
             
             # Performance
             workers=8,        # Anzahl CPU Worker für Dataloading
-            pretrained=False, # WICHTIG: Kein Pretrained Model!
+            pretrained=True,  # Transfer Learning von vortrainiertem Modell
             
             # Logging
             plots=True,       # Erstelle Trainings-Plots
@@ -168,7 +168,7 @@ def train_from_scratch(
         print(f"   3. Bei schlechten Ergebnissen:")
         print(f"      - Mehr Daten sammeln")
         print(f"      - Annotationen überprüfen")
-        print(f"      - Transfer Learning versuchen (yolo26m.pt statt .yaml)")
+        print(f"      - Mehr Epochen trainieren oder Hyperparameter anpassen")
         
     except KeyboardInterrupt:
         print("\n⚠️  Training manuell abgebrochen")
@@ -197,8 +197,11 @@ def resume_training(weights_path, epochs=100):
 if __name__ == "__main__":
     # ============= KONFIGURATION =============
     
+    # Projekt-Ordner (Verzeichnis des Skripts)
+    SCRIPT_DIR = Path(__file__).parent
+    
     # Dataset
-    DATA_YAML = 'dataset/data.yaml'
+    DATA_YAML = SCRIPT_DIR / 'dataset' / 'data.yaml'
     
     # Modell-Größe (je größer, desto genauer aber langsamer)
     # 'n' = nano (~3M params, schnellste)
@@ -209,21 +212,21 @@ if __name__ == "__main__":
     MODEL_SIZE = 'm'
     
     # Training-Parameter
-    EPOCHS = 300         # 300-500 für von Scratch, bei wenig Daten auch 150-200
+    EPOCHS = 100        # 100-200 für Transfer Learning (weniger als von Scratch)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
-    BATCH_SIZE = 16      # Anpassen je nach GPU (8, 16, 32, 64)
+    BATCH_SIZE = 64      # Anpassen je nach GPU (8, 16, 32, 64)
     
     # Hardware
     DEVICE = 0           # 0 = erste GPU, 'cpu' für CPU
     
-    # Projekt
-    PROJECT_NAME = 'arbeitsblatt_yolo'
-    RUN_NAME = 'from_scratch_m'
+    # Projekt (wird im Skript-Ordner gespeichert)
+    PROJECT_NAME = str(SCRIPT_DIR / 'arbeitsblatt_yolo')
+    RUN_NAME = 'transfer_learning'
     
     # ============= TRAINING STARTEN =============
     
     train_from_scratch(
-        data_yaml=DATA_YAML,
+        data_yaml=str(DATA_YAML),
         model_size=MODEL_SIZE,
         epochs=EPOCHS,
         img_size=IMG_SIZE,
