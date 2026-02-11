@@ -5,3 +5,4 @@ test*
 debug_outputs/
 dataset/
 *.pt
+raw_images/

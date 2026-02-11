@@ -68,14 +68,14 @@ def train_from_scratch(
         return
     
     # Modell von Scratch initialisieren (YAML Config, kein .pt)
-    model_config = f'yolo11{model_size}.yaml'
+    model_config = f'yolo26{model_size}.yaml'
     print(f"\n📥 Initialisiere Modell von Scratch: {model_config}")
     
     try:
         model = YOLO(model_config)
     except Exception as e:
         print(f"❌ Fehler beim Laden der Modell-Config: {e}")
-        print(f"💡 Stelle sicher, dass 'yolo11{model_size}.yaml' verfügbar ist")
+        print(f"💡 Stelle sicher, dass 'yolo26{model_size}.yaml' verfügbar ist")
         return
     
     print("✅ Modell initialisiert (komplett zufällige Gewichte)")
@@ -168,7 +168,7 @@ def train_from_scratch(
         print(f"   3. Bei schlechten Ergebnissen:")
         print(f"      - Mehr Daten sammeln")
         print(f"      - Annotationen überprüfen")
-        print(f"      - Transfer Learning versuchen (yolo11m.pt statt .yaml)")
+        print(f"      - Transfer Learning versuchen (yolo26m.pt statt .yaml)")
         
     except KeyboardInterrupt:
         print("\n⚠️  Training manuell abgebrochen")
