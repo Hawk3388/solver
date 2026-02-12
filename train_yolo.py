@@ -55,18 +55,6 @@ def train_from_scratch(
     print(f"🖥️  Device: {'GPU ' + str(device) if device != 'cpu' else 'CPU'}")
     print("=" * 70)
     
-    # Info: Transfer Learning
-    print("\n✅ Transfer Learning (vortrainiertes Modell wird angepasst)")
-    print("   - Benötigt weniger Daten (50-100+ Bilder reichen)")
-    print("   - Schnelleres Training")
-    print("   - Bessere Ergebnisse als Training von Scratch")
-    print("   - Vortrainierte Features werden für deine Klasse angepasst\n")
-    
-    response = input("Fortfahren? (j/n): ").lower()
-    if response != 'j':
-        print("❌ Training abgebrochen")
-        return
-    
     # Vortrainiertes Modell laden (Transfer Learning)
     model_config = f'yolo26{model_size}.pt'
     print(f"\n📥 Lade vortrainiertes Modell: {model_config}")
@@ -212,9 +200,9 @@ if __name__ == "__main__":
     MODEL_SIZE = 'm'
     
     # Training-Parameter
-    EPOCHS = 100        # 100-200 für Transfer Learning (weniger als von Scratch)
+    EPOCHS = 200        # 100-200 für Transfer Learning (weniger als von Scratch)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
-    BATCH_SIZE = 64      # Anpassen je nach GPU (8, 16, 32, 64)
+    BATCH_SIZE = 32      # Anpassen je nach GPU (8, 16, 32, 64)
     
     # Hardware
     DEVICE = 0           # 0 = erste GPU, 'cpu' für CPU
