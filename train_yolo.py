@@ -167,7 +167,7 @@ if __name__ == "__main__":
     SCRIPT_DIR = Path(__file__).parent
     
     # Dataset
-    DATA_YAML = SCRIPT_DIR / 'dataset' / 'data.yaml'
+    DATA_YAML = str(SCRIPT_DIR / 'dataset' / 'data.yaml')
     
     # Modell-Größe (je größer, desto genauer aber langsamer)
     # 'n' = nano (~3M params, schnellste)
@@ -178,7 +178,7 @@ if __name__ == "__main__":
     MODEL_SIZE = 'l'
     
     # Training-Parameter
-    EPOCHS = 500        # 100-200 für Transfer Learning (weniger als von Scratch)
+    EPOCHS = 1000        # 100-200 für Transfer Learning (weniger als von Scratch)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
     BATCH_SIZE = 16      # Anpassen je nach GPU (8, 16, 32, 64)
     
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     # ============= TRAINING STARTEN =============
     
     train(
-        data_yaml=str(DATA_YAML),
+        data_yaml=DATA_YAML,
         model_size=MODEL_SIZE,
         epochs=EPOCHS,
         img_size=IMG_SIZE,
@@ -204,4 +204,4 @@ if __name__ == "__main__":
     
     # ============= TRAINING FORTSETZEN (Optional) =============
     # Wenn Training unterbrochen wurde:
-    # resume_training('arbeitsblatt_yolo/from_scratch_m/weights/last.pt', epochs=100)
+    # resume_training('arbeitsblatt_yolo/transfer_learning16/weights/last.pt', epochs=EPOCHS)
