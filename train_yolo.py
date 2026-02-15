@@ -202,7 +202,7 @@ if __name__ == "__main__":
     # Training-Parameter
     EPOCHS = 200        # 100-200 für Transfer Learning (weniger als von Scratch)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
-    BATCH_SIZE = 32      # Anpassen je nach GPU (8, 16, 32, 64)
+    BATCH_SIZE = 16      # Anpassen je nach GPU (8, 16, 32, 64)
     
     # Hardware
     DEVICE = 0           # 0 = erste GPU, 'cpu' für CPU
