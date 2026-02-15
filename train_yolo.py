@@ -7,7 +7,7 @@ from ultralytics import YOLO
 from pathlib import Path
 import yaml
 
-def train_from_scratch(
+def train(
     data_yaml='dataset/data.yaml',
     model_size='m',  # n, s, m, l, x (m = medium)
     epochs=300,
@@ -84,32 +84,10 @@ def train_from_scratch(
             name=run_name,
             exist_ok=False,  # Erstelle neuen Ordner wenn Name existiert
             
-            # Optimizer-Einstellungen
-            optimizer='SGD',  # Standard: Stochastic Gradient Descent
-            lr0=0.01,         # Initiale Learning Rate
-            lrf=0.01,         # Finale Learning Rate (lr0 * lrf)
-            momentum=0.937,   # SGD Momentum
-            weight_decay=0.0005,  # Weight Decay
-            
-            # Augmentation (sehr wichtig bei wenig Daten!)
-            augment=True,
-            hsv_h=0.015,      # Hue Augmentation
-            hsv_s=0.7,        # Saturation Augmentation
-            hsv_v=0.4,        # Value Augmentation
-            degrees=0.0,      # Rotation (bei Arbeitsblättern eher 0)
-            translate=0.1,    # Translation
-            scale=0.5,        # Scaling
-            shear=0.0,        # Shear (bei Arbeitsblättern 0)
-            perspective=0.0,  # Perspective Warp (bei Arbeitsblättern 0)
-            flipud=0.0,       # Vertical Flip (nicht für Arbeitsblätter!)
-            fliplr=0.0,       # Horizontal Flip (nicht für Arbeitsblätter!)
-            mosaic=1.0,       # Mosaic Augmentation
-            mixup=0.0,        # MixUp (bei 1 Klasse weniger sinnvoll)
-            
             # Early Stopping & Checkpointing
-            patience=50,      # Stoppe wenn keine Verbesserung nach N Epochen
+            patience=0,      # Stoppe wenn keine Verbesserung nach N Epochen
             save=True,        # Speichere Checkpoints
-            save_period=10,   # Speichere alle N Epochen
+            save_period=100,   # Speichere alle N Epochen
             
             # Validation
             val=True,
@@ -197,7 +175,7 @@ if __name__ == "__main__":
     # 'm' = medium (~20M params) ← EMPFOHLEN
     # 'l' = large (~25M params)
     # 'x' = extra large (~50M params)
-    MODEL_SIZE = 'm'
+    MODEL_SIZE = 'l'
     
     # Training-Parameter
     EPOCHS = 500        # 100-200 für Transfer Learning (weniger als von Scratch)
@@ -213,7 +191,7 @@ if __name__ == "__main__":
     
     # ============= TRAINING STARTEN =============
     
-    train_from_scratch(
+    train(
         data_yaml=str(DATA_YAML),
         model_size=MODEL_SIZE,
         epochs=EPOCHS,
