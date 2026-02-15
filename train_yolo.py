@@ -115,7 +115,7 @@ def train_from_scratch(
             val=True,
             
             # Performance
-            workers=8,        # Anzahl CPU Worker für Dataloading
+            workers=4,        # 0 für Windows (kein multiprocessing), sonst 4-8
             pretrained=True,  # Transfer Learning von vortrainiertem Modell
             
             # Logging
