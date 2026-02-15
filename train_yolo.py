@@ -200,7 +200,7 @@ if __name__ == "__main__":
     MODEL_SIZE = 'm'
     
     # Training-Parameter
-    EPOCHS = 200        # 100-200 für Transfer Learning (weniger als von Scratch)
+    EPOCHS = 500        # 100-200 für Transfer Learning (weniger als von Scratch)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
     BATCH_SIZE = 16      # Anpassen je nach GPU (8, 16, 32, 64)
     
