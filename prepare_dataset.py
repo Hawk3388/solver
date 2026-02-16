@@ -144,6 +144,20 @@ def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=Fals
         print(f"❌ Ordner nicht gefunden: {source_dir}")
         return
     
+    if output_path.exists():
+        print(f"⚠️  Zielordner existiert bereits: {output_dir}")
+        while True:
+            choice = input("Möchtest du den Ordner löschen und neu erstellen? (y/n): ").lower()
+            if choice == 'y':
+                shutil.rmtree(output_path)
+                print(f"🗑️  Ordner gelöscht: {output_dir}")
+                break
+            elif choice == 'n':
+                print("Abbruch. Bitte wähle einen anderen Zielordner.")
+                return
+            else:
+                print("Ungültige Eingabe. Bitte 'y' oder 'n' eingeben.")
+
     # Dataset Struktur erstellen
     folders = [
         'images/train',
@@ -163,7 +177,6 @@ def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=Fals
     images = []
     for ext in image_extensions:
         images.extend(list(source_path.glob(f'*{ext}')))
-        images.extend(list(source_path.glob(f'*{ext.upper()}')))
     
     if len(images) == 0:
         print(f"❌ Keine Bilder gefunden in: {source_dir}")
