@@ -172,13 +172,13 @@ if __name__ == "__main__":
     # Modell-Größe (je größer, desto genauer aber langsamer)
     # 'n' = nano (~3M params, schnellste)
     # 's' = small (~9M params)
-    # 'm' = medium (~20M params) ← EMPFOHLEN
-    # 'l' = large (~25M params)
+    # 'm' = medium (~20M params)
+    # 'l' = large (~25M params) ← EMPFOHLEN
     # 'x' = extra large (~50M params)
     MODEL_SIZE = 'l'
     
     # Training-Parameter
-    EPOCHS = 2000        # Anzahl Epochen (je mehr, desto besser - aber länger)
+    EPOCHS = 1000        # Anzahl Epochen (je mehr, desto besser - aber länger)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
     BATCH_SIZE = 16      # Anpassen je nach GPU (8, 16, 32, 64)
     
