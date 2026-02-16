@@ -14,7 +14,7 @@ def train(
     img_size=640,
     batch_size=16,
     project_name='arbeitsblatt_yolo',
-    run_name='from_scratch_m',
+    run_name='transfer_learning',
     device=0,  # 0 = GPU, 'cpu' = CPU
 ):
     """
@@ -178,7 +178,7 @@ if __name__ == "__main__":
     MODEL_SIZE = 'l'
     
     # Training-Parameter
-    EPOCHS = 1000        # 100-200 für Transfer Learning (weniger als von Scratch)
+    EPOCHS = 2000        # 100-200 für Transfer Learning (weniger als von Scratch)
     IMG_SIZE = 640       # Standard: 640, für hochauflösende Bilder: 1280
     BATCH_SIZE = 16      # Anpassen je nach GPU (8, 16, 32, 64)
     
@@ -204,4 +204,4 @@ if __name__ == "__main__":
     
     # ============= TRAINING FORTSETZEN (Optional) =============
     # Wenn Training unterbrochen wurde:
-    # resume_training('arbeitsblatt_yolo/transfer_learning16/weights/last.pt', epochs=EPOCHS)
+    # resume_training('arbeitsblatt_yolo/transfer_learning/weights/last.pt', epochs=EPOCHS)
