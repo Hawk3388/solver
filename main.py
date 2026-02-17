@@ -296,30 +296,33 @@ class ArbeitsblattSolver():
         """Frage Gemini nach dem Inhalt ALLER Lücken auf einmal - genau wie test3"""
         try:
             # Speichere das markierte Bild (mit den Boxen) genau wie test3 es erwartet
-            cv2.imwrite('./arbeitsblatt_markiert_smart.png', marked_image)
-            
-            # Dann lade es als PIL Image (genau wie test3)
-            image = Image.open("./arbeitsblatt_markiert_smart.png")
+            marked_image_path = "./arbeitsblatt_markiert_smart.png"
+            cv2.imwrite(marked_image_path, marked_image)
 
-            prompt = f"""Du siehst ein Arbeitsblatt mit {len(self.freie_stellen)} nummerierten Lücken (rote/grüne Boxen).
+            prompt = f"""You are an expert language teacher and worksheet solver. You are given an image of a worksheet with {len(self.freie_stellen)} numbered gaps highlighted by red bounding boxes.
 
-AUFGABE: Analysiere das Arbeitsblatt und die Aufgabe genau und löse diese.
+TASK: Analyze the worksheet thoroughly and fill in every numbered gap with the correct answer.
 
-Gehe so vor:
-1. Schaue dir den Text an
-2. Verstehe den Kontext und das Thema  
-3. Suche nach Hinweisen im Bild
-4. Gib für jede Box die passende Lösung zurück
+STEP-BY-STEP INSTRUCTIONS:
+1. **Read the entire worksheet carefully.** Identify the language, the topic, and the type of exercise (e.g., fill-in-the-blank, cloze test, grammar exercise, vocabulary).
+2. **Identify the instructions.** Look for any task description printed on the worksheet (e.g., "Fill in the correct verb form", "Use the words from the box"). Follow these instructions precisely.
+3. **Use all available clues.** Check for word banks, hint boxes, example answers, images, or any other supporting material visible on the worksheet.
+4. **Determine the correct answer for each numbered gap** by considering:
+   - Grammar rules (verb conjugation, noun declension, articles, cases, tense, subject-verb agreement)
+   - Sentence structure and syntax
+   - Semantic context and logical coherence
+   - Spelling and orthography
+5. **Return one answer per numbered gap.** Each answer should contain ONLY the missing word(s) — no punctuation, no extra explanation.
 
-Achte auf:
-- Grammatik und Satzstruktur
-- Kontext des Textes
-- Verfügbare Hinweise im Arbeitsblatt
-- Logischen Sinnzusammenhang
-
-Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht Teil der Aufgabe ist oder nicht ausgefüllt werden muss antworte einfach mit none."""
+IMPORTANT RULES:
+- Answers must be in the SAME LANGUAGE as the worksheet (not in English, unless the worksheet is in English).
+- If a gap is clearly not part of the exercise or does not need to be filled, return "none" for that gap.
+- Keep answers concise: only the word(s) that belong in the gap.
+- Do NOT repeat surrounding text — only provide the missing content.
+- Number your answers to match the red box numbers exactly."""
 
             if not self.local:
+                image = Image.open(marked_image_path)
                 response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=[image, prompt],
@@ -332,7 +335,7 @@ Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht 
             else:
                 response = ollama.chat(
                     model=self.model_name,
-                    messages=[{"role": "user", "content": prompt, "images": [image]}],
+                    messages=[{"role": "user", "content": prompt, "images": [marked_image_path]}],
                     format=get_solution.model_json_schema()
                 )
                 output = get_solution.model_validate_json(response.message.content)
