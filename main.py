@@ -1,6 +1,7 @@
 import cv2
 import base64
 import os
+import ollama
 from pydantic import BaseModel
 from google import genai
 from dotenv import load_dotenv
@@ -20,23 +21,28 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class ArbeitsblattSolver():
-    def __init__(self, model_path: str = "best.pt"):
-        self.model_path = model_path
+    def __init__(self, yolo_model_path: str = "best_model.pt", llm_model_name: str = "gemini-2.5-flash", local: bool = False):
+        self.model_path = yolo_model_path
+        self.model_name = llm_model_name
+        self.local = local
         if not Path(self.model_path).exists():
             print(f"❌ Trainiertes Modell nicht gefunden: {self.model_path}")
             print(f"💡 Führe zuerst train_yolo.py aus!")
             print(f"\nFalls vorhanden, ändere MODEL_PATH zur korrekten Position")
             exit()
+        if not self.local:
+            load_dotenv()
+            self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
         self.model = YOLO(self.model_path)
         
         self.image = None
         self.freie_stellen = []
         
-    def load_image(self):
+    def load_image(self, image_path: str):
         """Bild laden und Kopie für Bearbeitung erstellen"""
-        self.image = cv2.imread(self.image_path)
+        self.image = cv2.imread(image_path)
         if self.image is None:
-            raise FileNotFoundError(f"Bild {self.image_path} nicht gefunden!")
+            raise FileNotFoundError(f"Bild {image_path} nicht gefunden!")
         return self.image.copy()
     
     def calculate_iou(self, box1, box2):
@@ -229,17 +235,27 @@ class ArbeitsblattSolver():
                 for idx in keep_indices:
                     box = r.boxes[idx]
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                    self.freie_stellen.append((x1, y1, x2, y2))
+                    self.freie_stellen.append((int(x1), int(y1), int(x2), int(y2)))
                 img = r.orig_img.copy()
+        
+        # Sortiere von oben nach unten, links nach rechts
+        self.freie_stellen.sort(key=lambda gap: (gap[1], gap[0]))
                     
         return self.freie_stellen, img
 
     def mark_gaps(self, image, gaps):
-        """Markiere gefundene Lücken im Bild"""
+        """Markiere gefundene Lücken im Bild mit Nummern"""
 
-        for gap in gaps:
+        for i, gap in enumerate(gaps):
             x1, y1, x2, y2 = gap
-            cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            # Rote Box zeichnen
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            # Nummer links oben an der Box
+            label = str(i + 1)
+            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+            # Hintergrund für bessere Lesbarkeit
+            cv2.rectangle(image, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), (0, 0, 255), -1)
+            cv2.putText(image, label, (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         return image
 
         # if image is None:
@@ -303,17 +319,25 @@ Achte auf:
 
 Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht Teil der Aufgabe ist oder nicht ausgefüllt werden muss antworte einfach mit none."""
 
-            # Exakt wie in test3
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[image, prompt],
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": get_solution,
-                },
-            )
+            if not self.local:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=[image, prompt],
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_schema": get_solution,
+                    },
+                )
+                output = response.parsed
+            else:
+                response = ollama.chat(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt, "images": [image]}],
+                    format=get_solution.model_json_schema()
+                )
+                output = get_solution.model_validate_json(response.message.content)
             
-            return response.parsed
+            return output
 
         except Exception as e:
             print(f"Fehler bei Ollama-Anfrage: {str(e)}")
@@ -381,72 +405,69 @@ Gib für jede nummerierte Box die passende Lösung zurück, falls die Box nicht 
                     print(f"Fehler beim Verarbeiten von Lücke {gap_id}: {e}")
                     continue
             
-            if solutions:
-                print("✨ Erkannte Lösungen:")
-                for i, sol in solutions.items():
-                    print(f"  Lücke {i+1}: '{sol['solution']}'")
-            else:
-                print("❌ Keine gültigen Lösungen gefunden.")
-            
             return solutions
         else:
             print("❌ Keine Antwort von Ollama erhalten.")
             return {}
     
-    def fill_gaps_in_image(self, solutions: dict, output_path: str = "arbeitsblatt_gelöst.png"):
+    def fill_gaps_in_image(self, image_path: str, solutions: dict, output_path: str = "arbeitsblatt_gelöst.png"):
         """Fülle die Lösungen in das Bild ein"""
-        result_image = self.load_image()
+        # OpenCV Bild laden und zu PIL konvertieren (für Unicode/Umlaute)
+        cv_image = self.load_image(image_path)
+        pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
+        
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(pil_image)
         
         for gap_index, solution_data in solutions.items():
-            x, y, w, h = solution_data['position']
+            # Position ist (x1, y1, x2, y2)
+            x1, y1, x2, y2 = solution_data['position']
+            w = x2 - x1
+            h = y2 - y1
             solution = solution_data['solution']
             
-            # Text-Encoding für deutsche Umlaute korrigieren
-            if isinstance(solution, str):
-                solution = solution.encode('utf-8').decode('utf-8')
+            if not solution or solution.lower() == 'none':
+                continue
             
-            # PowerPoint-style dynamische Schriftgröße
-            # Starte mit einer großen Schrift und reduziere bis Text passt
-            max_font_scale = 2.0  # Maximum
-            min_font_scale = 0.3  # Minimum
-            font_scale = max_font_scale
-            thickness = 1
+            # Dynamische Schriftgröße finden
+            font_size = 40  # Starte groß
+            min_font_size = 8
+            font = None
             
-            # Iterativ die beste Schriftgröße finden
-            while font_scale >= min_font_scale:
-                (text_width, text_height), baseline = cv2.getTextSize(
-                    solution, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            while font_size >= min_font_size:
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except OSError:
+                    try:
+                        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
+                    except OSError:
+                        font = ImageFont.load_default()
+                        break
                 
-                # Prüfe ob Text mit etwas Padding in die Box passt
-                padding = 4  # Mindestabstand zum Rand
-                if (text_width <= w - padding and text_height <= h - padding):
-                    break  # Perfekte Größe gefunden
+                bbox = draw.textbbox((0, 0), solution, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
                 
-                font_scale -= 0.1  # Verkleinere Schrift
+                padding = 4
+                if text_width <= w - padding and text_height <= h - padding:
+                    break
+                
+                font_size -= 1
             
-            # Nochmal final messen mit gefundener Größe
-            (text_width, text_height), baseline = cv2.getTextSize(
-                solution, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            # Text-Größe mit finaler Schrift messen
+            bbox = draw.textbbox((0, 0), solution, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
             
-            # Text ZENTRIERT in der Lücke positionieren
-            text_x = x + (w - text_width) // 2  # Horizontal zentriert
-            text_y = y + (h + text_height) // 2  # Vertikal zentriert
+            # Text zentriert in der Box positionieren
+            text_x = x1 + (w - text_width) // 2
+            text_y = y1 + (h - text_height) // 2
             
-            # Sicherstellen dass Text im Bild bleibt
-            if text_x < x:
-                text_x = x + 2
-            if text_x + text_width > x + w:
-                text_x = x + w - text_width - 2
-            if text_y - text_height < y:
-                text_y = y + text_height + 2
-            if text_y > y + h:
-                text_y = y + h - 2
-            
-            # Text in SCHWARZ einfügen (wie mit Stift geschrieben)
-            cv2.putText(result_image, solution, (text_x, text_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness)
+            # Text in schwarz zeichnen
+            draw.text((text_x, text_y), solution, fill=(0, 0, 0), font=font)
         
-        # Speichere das Ergebnis
+        # Zurück zu OpenCV und speichern
+        result_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
         cv2.imwrite(output_path, result_image)
         print(f"Gelöstes Arbeitsblatt gespeichert als: {output_path}")
         return result_image
@@ -479,7 +500,7 @@ def main():
                 for i, sol in solutions.items():
                     print(f"  Lücke {i+1}: '{sol['solution']}'")
                 
-                result_image = solver.fill_gaps_in_image(solutions)
+                solver.fill_gaps_in_image(path, solutions)
                 
                 print("\n📁 Ergebnis gespeichert. Drücke eine Taste zum Beenden...")
             else:
