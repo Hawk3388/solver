@@ -1,127 +1,160 @@
 import cv2
 import numpy as np
+from ultralytics import YOLO
+from pathlib import Path
 
-def find_gaps_smart():
-    """Intelligente Lücken-Erkennung für Arbeitsblätter"""
+
+def sort_reading_order(boxes):
+    """Sortiere Boxen in Lesereihenfolge: zeilenweise von oben nach unten, innerhalb der Zeile links nach rechts.
     
-    # Bild laden
-    image = cv2.imread('arbeitsblatt.png')
-    if image is None:
-        print("❌ arbeitsblatt.png nicht gefunden!")
+    Boxen auf derselben Textzeile haben oft leicht unterschiedliche y-Werte.
+    Diese Methode gruppiert Boxen mit ähnlicher y-Position (Überlappung) in Zeilen.
+    Format: (x1, y1, x2, y2)
+    """
+    if not boxes:
+        return boxes
+    
+    # Sortiere zunächst grob nach y
+    boxes_sorted = sorted(boxes, key=lambda b: b[1])
+    
+    # Gruppiere in Zeilen basierend auf vertikaler Überlappung
+    lines = []
+    current_line = [boxes_sorted[0]]
+    line_y_min = boxes_sorted[0][1]
+    line_y_max = boxes_sorted[0][3]  # y2
+    
+    for box in boxes_sorted[1:]:
+        box_y_top = box[1]
+        box_y_bottom = box[3]  # y2
+        box_height = box_y_bottom - box_y_top
+        line_height = line_y_max - line_y_min
+        
+        # Prüfe ob die Box vertikal mit der aktuellen Zeile überlappt
+        overlap = min(line_y_max, box_y_bottom) - max(line_y_min, box_y_top)
+        min_height = max(min(box_height, line_height), 1)
+        
+        if overlap > 0 and overlap / min_height > 0.3:
+            # Gleiche Zeile
+            current_line.append(box)
+            line_y_min = min(line_y_min, box_y_top)
+            line_y_max = max(line_y_max, box_y_bottom)
+        else:
+            # Neue Zeile
+            lines.append(current_line)
+            current_line = [box]
+            line_y_min = box_y_top
+            line_y_max = box_y_bottom
+    
+    lines.append(current_line)
+    
+    # Innerhalb jeder Zeile nach x sortieren
+    result = []
+    for line in lines:
+        line.sort(key=lambda b: b[0])
+        result.extend(line)
+    
+    return result
+
+
+def calculate_iou(box1, box2):
+    """Berechnet Intersection over Union (IoU) zwischen zwei Boxen [x1, y1, x2, y2]"""
+    x1_inter = max(box1[0], box2[0])
+    y1_inter = max(box1[1], box2[1])
+    x2_inter = min(box1[2], box2[2])
+    y2_inter = min(box1[3], box2[3])
+    
+    if x2_inter < x1_inter or y2_inter < y1_inter:
+        return 0.0
+    
+    inter_area = (x2_inter - x1_inter) * (y2_inter - y1_inter)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+def filter_overlapping_boxes(boxes, iou_threshold=0.5):
+    """Filtert überlappende Boxen - behält nur die mit höchster Confidence"""
+    if len(boxes) == 0:
         return []
     
-    h, w = image.shape[:2]
-    print(f"📊 Bild geladen: {w} x {h} Pixel")
+    coords = boxes.xyxy.cpu().numpy()
+    confidences = boxes.conf.cpu().numpy()
+    sorted_indices = np.argsort(-confidences)
     
-    # In Graustufen umwandeln
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    keep = []
+    for i in sorted_indices:
+        should_keep = True
+        for kept_idx in keep:
+            iou = calculate_iou(coords[i], coords[kept_idx])
+            if iou > iou_threshold:
+                should_keep = False
+                break
+        if should_keep:
+            keep.append(i)
+    
+    return sorted(keep)
+
+
+def find_gaps_yolo(path: str, model_path: str = "best_model.pt", conf: float = 0.25):
+    """YOLO-basierte Lücken-Erkennung für Arbeitsblätter"""
+    
+    if not Path(path).exists():
+        print(f"❌ Bild {path} nicht gefunden!")
+        return []
+    
+    if not Path(model_path).exists():
+        print(f"❌ YOLO-Modell {model_path} nicht gefunden!")
+        return []
+    
+    model = YOLO(model_path)
+    print(f"📊 YOLO-Modell geladen: {model_path}")
+    
+    # YOLO Prediction
+    results = model.predict(source=path, conf=conf)
     
     gaps = []
+    img = None
     
-    # Schritt 1: Horizontale Linien finden (Unterstriche)
-    inv = cv2.bitwise_not(gray)
-    _, thresh = cv2.threshold(inv, 100, 255, cv2.THRESH_BINARY)
+    for r in results:
+        img = r.orig_img.copy()
+        if len(r.boxes) > 0:
+            keep_indices = filter_overlapping_boxes(r.boxes, iou_threshold=0.5)
+            print(f"🔍 {len(r.boxes)} Boxen erkannt, nach Filterung: {len(keep_indices)}")
+            
+            for idx in keep_indices:
+                box = r.boxes[idx]
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                gaps.append((int(x1), int(y1), int(x2), int(y2)))
+        else:
+            print("❌ Keine Lücken erkannt!")
+            return []
     
-    # Größerer Kernel für zusammenhängende Linien
-    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1))
-    horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel)
+    # Sortieren in Lesereihenfolge (zeilenweise gruppiert)
+    gaps = sort_reading_order(gaps)
     
-    # Linien erweitern um Lücken zu schließen
-    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 3))
-    horizontal_lines = cv2.dilate(horizontal_lines, dilate_kernel, iterations=1)
-    
-    # Konturen der Linien finden
-    contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Linien zu Textbereichen konvertieren
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        
-        # Filter für wahrscheinliche Unterstriche (nicht zu klein, nicht zu groß)
-        if w > 40 and h < 15 and w > h * 4:
-            # Prüfe dass es keine Tabellenlinie ist (zu lang = Tabelle)
-            if w < 350:  # Keine Tabellenlinien
-                # Textbereich ÜBER der Linie definieren
-                text_height = 18  # Höhe für Text
-                text_y = max(0, y - text_height)  # Über der Linie
-                text_w = w
-                text_h = text_height
-                
-                gaps.append((x, text_y, text_w, text_h))
-    
-    # Schritt 2: Freie rechteckige Bereiche finden (ohne Unterstriche)
-    # Bereiche mit viel Weißraum
-    _, white_thresh = cv2.threshold(gray, 235, 255, cv2.THRESH_BINARY)
-    
-    # Morphologie um kleine Störungen zu entfernen
-    clean_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    white_areas = cv2.morphologyEx(white_thresh, cv2.MORPH_OPEN, clean_kernel)
-    
-    # Größere zusammenhängende Bereiche finden
-    expand_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    white_areas = cv2.morphologyEx(white_areas, cv2.MORPH_CLOSE, expand_kernel)
-    
-    # Konturen der weißen Bereiche
-    white_contours, _ = cv2.findContours(white_areas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    for contour in white_contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        
-        # Filter für wahrscheinliche Textbereiche
-        area = w * h
-        if 1500 < area < 6000:  # Mittelgroße Bereiche
-            aspect_ratio = w / h if h > 0 else 0
-            if 2 < aspect_ratio < 6:  # Eher horizontal für Text
-                # Prüfe ob schon eine Lücke in der Nähe ist
-                is_duplicate = False
-                for existing_x, existing_y, existing_w, existing_h in gaps:
-                    if (abs(x - existing_x) < 30 and abs(y - existing_y) < 20):
-                        is_duplicate = True
-                        break
-                
-                if not is_duplicate:
-                    gaps.append((x, y, w, h))
-    
-    # Duplikate entfernen und konsolidieren
-    final_gaps = []
-    gaps.sort(key=lambda g: (g[1], g[0]))  # Nach y, dann x sortieren
-    
-    for x, y, w, h in gaps:
-        # Schaue ob wir diesen Bereich mit einem existierenden kombinieren können
-        merged = False
-        for i, (fx, fy, fw, fh) in enumerate(final_gaps):
-            # Wenn sehr nahe beieinander, kombiniere sie
-            if abs(y - fy) < 10 and abs(x - fx) < 50:
-                # Kombiniere zu größerem Bereich
-                new_x = min(x, fx)
-                new_y = min(y, fy)
-                new_w = max(x + w, fx + fw) - new_x
-                new_h = max(y + h, fy + fh) - new_y
-                final_gaps[i] = (new_x, new_y, new_w, new_h)
-                merged = True
-                break
-        
-        if not merged:
-            final_gaps.append((x, y, w, h))
-    
-    # Sortieren von oben nach unten, links nach rechts
-    final_gaps.sort(key=lambda gap: (gap[1], gap[0]))
-    
-    print(f"✅ {len(final_gaps)} Lücken gefunden!")
+    print(f"✅ {len(gaps)} Lücken gefunden!")
     
     # Markieren
-    result = image.copy()
-    for i, (x, y, w, h) in enumerate(final_gaps):
-        color = (0, 255, 0) if i % 2 == 0 else (0, 0, 255)
-        cv2.rectangle(result, (x, y), (x+w, y+h), color, 2)
-        cv2.putText(result, str(i+1), (x, y-3), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        print(f"  Lücke {i+1}: ({x}, {y}, {w}x{h})")
+    result = img.copy()
+    for i, (x1, y1, x2, y2) in enumerate(gaps):
+        color = (0, 0, 255)
+        cv2.rectangle(result, (x1, y1), (x2, y2), color, 2)
+        # Nummer-Label mit Hintergrund
+        label = str(i + 1)
+        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.rectangle(result, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), color, -1)
+        cv2.putText(result, label, (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        print(f"  Lücke {i+1}: ({x1}, {y1}) -> ({x2}, {y2})")
     
     # Speichern
-    cv2.imwrite('arbeitsblatt_markiert_smart.png', result)
-    print(f"💾 Markiertes Bild gespeichert: arbeitsblatt_markiert_smart.png")
+    output_path = f"{Path(path).stem}_markiert.png"
+    cv2.imwrite(output_path, result)
+    print(f"💾 Markiertes Bild gespeichert: {output_path}")
     
-    return final_gaps
+    return gaps
+
 
 if __name__ == "__main__":
-    find_gaps_smart()
+    find_gaps_yolo("test.jpg")
