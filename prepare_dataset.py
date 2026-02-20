@@ -1,6 +1,7 @@
 """
 Dataset Vorbereitung für YOLO Training
 Verarbeitet Bilder aus einem Ordner und erstellt YOLO-Labels mittels gap detection
+Unterstützt sowohl CV-basierte als auch YOLO-basierte Erkennung
 """
 
 import cv2
@@ -8,6 +9,7 @@ import numpy as np
 from pathlib import Path
 import shutil
 from tqdm import tqdm
+from ultralytics import YOLO
 
 def find_gaps_in_image(image_path):
     """
@@ -98,6 +100,94 @@ def find_gaps_in_image(image_path):
     return final_gaps, (w, h)
 
 
+def calculate_iou(box1, box2):
+    """Berechnet Intersection over Union (IoU) zwischen zwei Boxen [x1, y1, x2, y2]"""
+    x1_inter = max(box1[0], box2[0])
+    y1_inter = max(box1[1], box2[1])
+    x2_inter = min(box1[2], box2[2])
+    y2_inter = min(box1[3], box2[3])
+    
+    if x2_inter < x1_inter or y2_inter < y1_inter:
+        return 0.0
+    
+    inter_area = (x2_inter - x1_inter) * (y2_inter - y1_inter)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+def filter_overlapping_boxes(boxes, iou_threshold=0.5):
+    """
+    Filtert überlappende Boxen - behält nur die mit höchster Confidence
+    
+    Args:
+        boxes: YOLO boxes Objekt
+        iou_threshold: Mindest-IoU für Überlappung (0.5 = 50%)
+    
+    Returns:
+        Liste von Indizes der zu behaltenden Boxen
+    """
+    if len(boxes) == 0:
+        return []
+    
+    coords = boxes.xyxy.cpu().numpy()
+    confidences = boxes.conf.cpu().numpy()
+    sorted_indices = np.argsort(-confidences)
+    
+    keep = []
+    for i in sorted_indices:
+        should_keep = True
+        for kept_idx in keep:
+            iou = calculate_iou(coords[i], coords[kept_idx])
+            if iou > iou_threshold:
+                should_keep = False
+                break
+        if should_keep:
+            keep.append(i)
+    
+    return sorted(keep)
+
+
+def find_gaps_with_yolo(image_path, model, conf=0.25, iou_threshold=0.5):
+    """
+    Findet freie Stellen mittels YOLO Modell
+    
+    Args:
+        image_path: Pfad zum Bild
+        model: Geladenes YOLO Modell
+        conf: Confidence Threshold
+        iou_threshold: IoU Threshold für Überlappungs-Filterung
+    
+    Returns: Liste von (x, y, w, h) Tupeln, (img_w, img_h)
+    """
+    image = cv2.imread(str(image_path))
+    if image is None:
+        print(f"❌ Fehler beim Laden: {image_path}")
+        return [], None
+    
+    img_h, img_w = image.shape[:2]
+    
+    results = model.predict(source=str(image_path), conf=conf, verbose=False)
+    
+    gaps = []
+    for r in results:
+        if len(r.boxes) > 0:
+            keep_indices = filter_overlapping_boxes(r.boxes, iou_threshold=iou_threshold)
+            
+            for idx in keep_indices:
+                box = r.boxes[idx]
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                # Konvertiere xyxy zu xywh Format
+                gaps.append((int(x1), int(y1), int(x2 - x1), int(y2 - y1)))
+    
+    # Sortieren
+    gaps.sort(key=lambda gap: (gap[1], gap[0]))
+    
+    return gaps, (img_w, img_h)
+
+
 def boxes_to_yolo_format(boxes, image_width, image_height):
     """
     Konvertiert Bounding Boxes zu YOLO Format
@@ -126,7 +216,7 @@ def boxes_to_yolo_format(boxes, image_width, image_height):
     return yolo_labels
 
 
-def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=False):
+def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=False, yolo_model_path=None, yolo_conf=0.25):
     """
     Bereitet Dataset für YOLO Training vor
     
@@ -135,6 +225,8 @@ def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=Fals
         output_dir: Zielordner für YOLO Dataset
         train_split: Anteil für Training (Rest für Validation)
         visualize: Wenn True, erstellt markierte Bilder zur Kontrolle
+        yolo_model_path: Pfad zum YOLO Modell (wenn None, wird CV-basierte Erkennung verwendet)
+        yolo_conf: Confidence Threshold für YOLO Erkennung
     """
     source_path = Path(source_dir)
     output_path = Path(output_dir)
@@ -183,6 +275,20 @@ def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=Fals
         return
     
     print(f"📁 {len(images)} Bilder gefunden")
+    
+    # YOLO Modell laden falls angegeben
+    yolo_model = None
+    if yolo_model_path:
+        yolo_model_file = Path(yolo_model_path)
+        if not yolo_model_file.exists():
+            print(f"❌ YOLO Modell nicht gefunden: {yolo_model_path}")
+            return
+        yolo_model = YOLO(str(yolo_model_path))
+        print(f"🤖 YOLO Modell geladen: {yolo_model_path}")
+        print(f"   Confidence Threshold: {yolo_conf}")
+    else:
+        print(f"🔧 Verwende CV-basierte Erkennung")
+    
     print(f"🔄 Verarbeite Bilder...")
     
     # Statistiken
@@ -196,10 +302,18 @@ def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=Fals
     
     # Bilder verarbeiten
     for idx, img_path in enumerate(tqdm(images, desc="Verarbeite")):
-        # Gaps finden
-        gaps, (img_w, img_h) = find_gaps_in_image(img_path)
+        # Gaps finden - mit YOLO oder CV-basiert
+        if yolo_model:
+            gaps, size = find_gaps_with_yolo(img_path, yolo_model, conf=yolo_conf)
+        else:
+            gaps, size = find_gaps_in_image(img_path)
         
-        if gaps is None or len(gaps) == 0:
+        if size is None:
+            stats['skipped'] += 1
+            continue
+        img_w, img_h = size
+        
+        if len(gaps) == 0:
             stats['skipped'] += 1
             print(f"⚠️  Keine Lücken gefunden in: {img_path.name}")
             continue
@@ -272,21 +386,28 @@ names: ['freie_stelle']
 
 if __name__ == "__main__":
     # Konfiguration
-    SOURCE_DIR = "raw_images"  # Ordner mit deinen Arbeitsblatt-Bildern
-    OUTPUT_DIR = "dataset"      # Zielordner für YOLO Dataset
-    TRAIN_SPLIT = 0.8          # 80% Training, 20% Validation
-    VISUALIZE = True           # Erstelle markierte Bilder zur Kontrolle
+    SOURCE_DIR = "raw_images"       # Ordner mit deinen Arbeitsblatt-Bildern
+    OUTPUT_DIR = "dataset"           # Zielordner für YOLO Dataset
+    TRAIN_SPLIT = 0.8               # 80% Training, 20% Validation
+    VISUALIZE = True                # Erstelle markierte Bilder zur Kontrolle
+    
+    # YOLO Modell für Erkennung (None = CV-basierte Erkennung)
+    YOLO_MODEL = "gap_detection_model.pt"  # Pfad zum trainierten YOLO Modell
+    YOLO_CONF = 0.25                       # Confidence Threshold
     
     print("🚀 YOLO Dataset Vorbereitung")
     print(f"📂 Quellordner: {SOURCE_DIR}")
     print(f"📂 Zielordner: {OUTPUT_DIR}")
     print(f"📊 Train/Val Split: {TRAIN_SPLIT*100:.0f}% / {(1-TRAIN_SPLIT)*100:.0f}%")
     print(f"🎨 Visualisierung: {'Ja' if VISUALIZE else 'Nein'}")
+    print(f"🤖 YOLO Modell: {YOLO_MODEL if YOLO_MODEL else 'Nicht verwendet (CV-basiert)'}")
     print("-" * 60)
     
     prepare_yolo_dataset(
         source_dir=SOURCE_DIR,
         output_dir=OUTPUT_DIR,
         train_split=TRAIN_SPLIT,
-        visualize=VISUALIZE
+        visualize=VISUALIZE,
+        yolo_model_path=YOLO_MODEL,
+        yolo_conf=YOLO_CONF
     )
