@@ -20,7 +20,7 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class ArbeitsblattSolver():
-    def __init__(self, path:str, yolo_model_path: str = "best_model.pt", llm_model_name: str = "gemini-2.5-flash", local: bool = False, experimental: bool = False):
+    def __init__(self, path:str, yolo_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", local: bool = False, experimental: bool = False):
         self.model_path = yolo_model_path
         self.model_name = llm_model_name
         self.local = local
