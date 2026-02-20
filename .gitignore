@@ -7,3 +7,4 @@ dataset/
 *.pt
 raw_images/
 arbeitsblatt_yolo/
+__pycache__/

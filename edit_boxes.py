@@ -3,8 +3,9 @@ Interaktives Skript zum Löschen von Bounding Boxes
 Geht alle Bilder im Dataset durch. Klicke auf Boxen um sie zu löschen.
 
 Steuerung:
-  - Linksklick: Box löschen (die Box unter dem Mauszeiger)
-  - 'z': Letzte Löschung rückgängig machen (Undo)
+  - Linksklick + Ziehen: Neue Box zeichnen
+  - Rechtsklick: Box löschen (die Box unter dem Mauszeiger)
+  - 'z': Letzte Aktion rückgängig machen (Undo)
   - 's': Änderungen speichern
   - 'n' / Leertaste: Speichern & nächstes Bild
   - 'p': Vorheriges Bild
@@ -48,8 +49,14 @@ class BoxEditor:
         # Boxen laden
         self.boxes = []  # Liste von (x1, y1, x2, y2) in Pixeln
         self.deleted_boxes = []  # Undo-Stack
+        self.undo_stack = []  # Allgemeiner Undo-Stack: ('add', box) oder ('delete', box)
         self.hover_idx = -1  # Index der Box unter dem Mauszeiger
         self.unsaved_changes = False
+        
+        # Zeichen-Modus (Rechtsklick + Ziehen)
+        self.drawing = False
+        self.draw_start = None  # (x, y)
+        self.draw_current = None  # (x, y)
         
         self._load_boxes()
     
@@ -151,7 +158,7 @@ class BoxEditor:
         display = self.original_image.copy()
         
         for i, (x1, y1, x2, y2) in enumerate(self.boxes):
-            if i == self.hover_idx:
+            if i == self.hover_idx and not self.drawing:
                 # Hervorgehobene Box (Maus darüber)
                 color = (0, 0, 255)  # Rot
                 thickness = 3
@@ -173,24 +180,39 @@ class BoxEditor:
             cv2.putText(display, label, (x1 + 2, y1 - 4), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
+        # Zeichne aktuelle Zeichnung (Rechtsklick-Drag)
+        if self.drawing and self.draw_start and self.draw_current:
+            sx, sy = self.draw_start
+            cx, cy = self.draw_current
+            x1_d, y1_d = min(sx, cx), min(sy, cy)
+            x2_d, y2_d = max(sx, cx), max(sy, cy)
+            cv2.rectangle(display, (x1_d, y1_d), (x2_d, y2_d), (255, 165, 0), 2)  # Orange
+            # Größe anzeigen
+            w_d, h_d = x2_d - x1_d, y2_d - y1_d
+            size_text = f"{w_d}x{h_d}"
+            cv2.putText(display, size_text, (x1_d, y1_d - 8),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 165, 0), 1)
+        
         # Status-Leiste unten
         status_h = 40
         status_bar = np.zeros((status_h, display.shape[1], 3), dtype=np.uint8)
         status_bar[:] = (40, 40, 40)
         
         progress = f"[{self.image_index + 1}/{self.total_images}] {self.image_path.name}"
-        info = f"{progress} | Boxen: {len(self.boxes)} | Geloescht: {len(self.deleted_boxes)}"
+        info = f"{progress} | Boxen: {len(self.boxes)}"
         if self.unsaved_changes:
             info += " | *"
-        if self.hover_idx >= 0:
+        if self.drawing:
+            info += " | ZEICHNEN..."
+        elif self.hover_idx >= 0:
             info += f" | Box {self.hover_idx + 1}"
         
         cv2.putText(status_bar, info, (10, 28), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         
-        controls = "Klick=Box weg | Z=Undo | S=Save | N/Space=Weiter | P=Back | D=Bild loeschen | Q=Ende"
-        cv2.putText(status_bar, controls, (display.shape[1] - 750, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
+        controls = "L-Drag=Neu | R=Box weg | Z=Undo | S=Save | N/Space=Weiter | P=Back | D=Bild weg | Q=Ende"
+        cv2.putText(status_bar, controls, (display.shape[1] - 780, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1)
         
         display = np.vstack([display, status_bar])
         return display
@@ -198,13 +220,47 @@ class BoxEditor:
     def _mouse_callback(self, event, x, y, flags, param):
         """Maus-Events verarbeiten"""
         if event == cv2.EVENT_MOUSEMOVE:
-            self.hover_idx = self._find_box_at(x, y)
+            if self.drawing:
+                self.draw_current = (x, y)
+            else:
+                self.hover_idx = self._find_box_at(x, y)
         
         elif event == cv2.EVENT_LBUTTONDOWN:
+            # Linksklick: Zeichnen starten
+            self.drawing = True
+            self.draw_start = (x, y)
+            self.draw_current = (x, y)
+        
+        elif event == cv2.EVENT_LBUTTONUP:
+            if self.drawing and self.draw_start:
+                self.drawing = False
+                sx, sy = self.draw_start
+                x1 = min(sx, x)
+                y1 = min(sy, y)
+                x2 = max(sx, x)
+                y2 = max(sy, y)
+                y2 = max(sy, y)
+                
+                # Mindestgröße prüfen (mind. 5x5 Pixel)
+                if (x2 - x1) >= 5 and (y2 - y1) >= 5:
+                    new_box = (x1, y1, x2, y2)
+                    self.boxes.append(new_box)
+                    self.boxes.sort(key=lambda b: (b[1], b[0]))
+                    self.undo_stack.append(('add', new_box))
+                    self.unsaved_changes = True
+                    print(f"➕ Neue Box: ({x1}, {y1}) -> ({x2}, {y2})")
+                else:
+                    print("⚠️  Box zu klein, verworfen")
+                
+                self.draw_start = None
+                self.draw_current = None
+        
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # Rechtsklick: Box löschen
             idx = self._find_box_at(x, y)
             if idx >= 0:
                 deleted_box = self.boxes.pop(idx)
-                self.deleted_boxes.append(deleted_box)
+                self.undo_stack.append(('delete', deleted_box))
                 self.unsaved_changes = True
                 self.hover_idx = -1
                 print(f"🗑️  Box {idx + 1} gelöscht: {deleted_box}")
@@ -221,6 +277,15 @@ class BoxEditor:
         
         with open(self.label_path, 'w') as f:
             f.write('\n'.join(yolo_lines))
+        
+        # Visualisierung updaten
+        viz_dir = self.image_path.parent.parent.parent / 'visualize' / self.image_path.parent.name
+        if viz_dir.exists():
+            viz_img = self.original_image.copy()
+            for x1, y1, x2, y2 in self.boxes:
+                cv2.rectangle(viz_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            viz_path = viz_dir / f"{self.image_path.stem}_marked{self.image_path.suffix}"
+            cv2.imwrite(str(viz_path), viz_img)
         
         self.unsaved_changes = False
         print(f"💾 {len(self.boxes)} Boxen gespeichert in: {self.label_path}")
@@ -308,12 +373,20 @@ class BoxEditor:
                     print("↩️  Löschen abgebrochen")
             
             elif key == ord('z'):  # Undo
-                if self.deleted_boxes:
-                    restored = self.deleted_boxes.pop()
-                    self.boxes.append(restored)
-                    self.boxes.sort(key=lambda b: (b[1], b[0]))
-                    self.unsaved_changes = True
-                    print(f"↩️  Box wiederhergestellt: {restored}")
+                if self.undo_stack:
+                    action_type, box = self.undo_stack.pop()
+                    if action_type == 'delete':
+                        # Gelöschte Box wiederherstellen
+                        self.boxes.append(box)
+                        self.boxes.sort(key=lambda b: (b[1], b[0]))
+                        self.unsaved_changes = True
+                        print(f"↩️  Box wiederhergestellt: {box}")
+                    elif action_type == 'add':
+                        # Hinzugefügte Box wieder entfernen
+                        if box in self.boxes:
+                            self.boxes.remove(box)
+                            self.unsaved_changes = True
+                            print(f"↩️  Hinzufügen rückgängig: {box}")
             
             elif key == ord('s'):  # Speichern
                 self.save_labels()
@@ -370,7 +443,8 @@ def main():
     
     print(f"📁 {len(pairs)} Bilder im Dataset gefunden")
     print(f"\n🎮 Steuerung:")
-    print(f"   Linksklick  = Box löschen")
+    print(f"   L-Ziehen    = Neue Box zeichnen")
+    print(f"   Rechtsklick = Box löschen")
     print(f"   Z           = Undo")
     print(f"   S           = Speichern")
     print(f"   N / Space   = Speichern & weiter")

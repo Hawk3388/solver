@@ -265,7 +265,7 @@ def prepare_yolo_dataset(source_dir, output_dir, train_split=0.8, visualize=Fals
         (output_path / folder).mkdir(parents=True, exist_ok=True)
     
     # Alle Bilder finden
-    image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+    image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp']
     images = []
     for ext in image_extensions:
         images.extend(list(source_path.glob(f'*{ext}')))
