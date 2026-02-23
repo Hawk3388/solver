@@ -9,7 +9,7 @@ import yaml
 
 def train(
     data_yaml='dataset/data.yaml',
-    model_size='l',  # n, s, m, l, x (m = medium)
+    model_size='l',  # n, s, m, l, x (l = large, recommended)
     epochs=300,
     img_size=640,
     batch_size=16,
