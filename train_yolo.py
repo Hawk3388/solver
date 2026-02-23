@@ -1,6 +1,6 @@
 """
 YOLO Training mit Transfer Learning für Arbeitsblatt Freie Stellen Erkennung
-Trainiert YOLOv26m mit vortrainierten Gewichten (nur eine Klasse: freie_stelle)
+Trainiert YOLOv26l mit vortrainierten Gewichten (nur eine Klasse: freie_stelle)
 """
 
 from ultralytics import YOLO
@@ -9,7 +9,7 @@ import yaml
 
 def train(
     data_yaml='dataset/data.yaml',
-    model_size='m',  # n, s, m, l, x (m = medium)
+    model_size='l',  # n, s, m, l, x (m = medium)
     epochs=300,
     img_size=640,
     batch_size=16,
