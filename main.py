@@ -6,7 +6,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from typing import List
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
@@ -168,7 +168,7 @@ class ArbeitsblattSolver():
     def detect_gaps(self):
         self.freie_stellen = []
 
-        results = self.model.predict(source=self.path, conf=0.25)
+        results = self.model.predict(source=self.path, conf=0.10)
 
         for r in results:
             if len(r.boxes) > 0:
@@ -335,7 +335,6 @@ Rules:
         cv_image = self.load_image(image_path)
         pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
         
-        from PIL import ImageDraw, ImageFont
         draw = ImageDraw.Draw(pil_image)
         
         for gap_index, solution_data in solutions.items():
@@ -395,7 +394,7 @@ Rules:
 def main():
     path = input("📂 Bitte den Pfad zum Arbeitsblatt-Bild eingeben: ").strip()
     # Beste Ergebnisse mit gemini-3-flash-preview
-    solver = ArbeitsblattSolver(path, llm_model_name="qwen3-vl:8b-thinking", local=True)
+    solver = ArbeitsblattSolver(path) # , llm_model_name="qwen3-vl:8b-thinking", local=True)
     
     print("🔍 Lade Bild und erkenne Lücken...")
     try:
@@ -410,7 +409,7 @@ def main():
             print(f"  Lücke {i+1}: {gap}")
         
         # Frage Benutzer, ob KI-Analyse gewünscht ist
-        user_input = input("\n🤖 Soll Ollama die Lücken analysieren und ausfüllen? (j/n): ").lower().strip()
+        user_input = input("\n🤖 Soll eine KI die Lücken analysieren und ausfüllen? (j/n): ").lower().strip()
         
         if user_input in ['j', 'ja', 'y', 'yes']:
             solutions = solver.solve_all_gaps(marked_image)
