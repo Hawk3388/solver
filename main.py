@@ -420,7 +420,7 @@ Rules:
 def main():
     path = input("📂 Please enter the path to the worksheet image: ").strip()
     # Best results with gemini-3-flash-preview (local: qwen3-vl:30b or mistral-small-3.2 for 16 GB VRAM)
-    solver = WorksheetSolver(path, llm_model_name="qwen3-vl:30b", local=True) # , llm_model_name="mistral-small-3.2", local=True)
+    solver = WorksheetSolver(path) # , llm_model_name="qwen3-vl:30b", local=True)
     
     print("🔍 Loading image and detecting gaps...")
     try:
