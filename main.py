@@ -20,11 +20,12 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, yolo_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", local: bool = False, experimental: bool = False):
+    def __init__(self, path:str, yolo_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", local: bool = False, debug: bool = False, experimental: bool = False):
         self.model_path = yolo_model_path
         self.model_name = llm_model_name
         self.local = local
         self.path = path
+        self.debug = debug
         self.experimental = experimental
         if not Path(self.path).exists():
             print(f"❌ Worksheet image not found: {self.path}")
@@ -300,8 +301,13 @@ Rules:
             else:
                 pass # Step 3 VL integration
             
-            if os.path.exists(self.path) and self.path.endswith("_temp.png"):
-                os.remove(self.path)
+            if not self.debug:
+                if os.path.exists(self.path) and self.path.endswith("_temp.png"):
+                    os.remove(self.path)
+                if os.path.exists(marked_image_path):
+                    os.remove(marked_image_path)
+            else:
+                print(f"AI output:\n{output}")
 
             return output
 
@@ -412,8 +418,8 @@ Rules:
 # Main program
 def main():
     path = input("📂 Please enter the path to the worksheet image: ").strip()
-    # Best results with gemini-3-flash-preview
-    solver = WorksheetSolver(path) # , llm_model_name="qwen3-vl:8b-thinking", local=True)
+    # Best results with gemini-3-flash-preview (local: mistral-small-3.2 for 16 GB VRAM)
+    solver = WorksheetSolver(path) # , llm_model_name="mistral-small-3.2", local=True)
     
     print("🔍 Loading image and detecting gaps...")
     try:
@@ -453,3 +459,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# TODO:
+# - Add support for multiple files (batch processing)
