@@ -30,6 +30,12 @@ class WorksheetSolver():
             print(f"❌ Worksheet image not found: {self.path}")
             print(f"💡 Please check the path to the image and try again.")
             exit()
+        else:
+            if not self.path.lower().endswith(".png"):
+                print(f"✅ Worksheet image found: {self.path}")
+                img = Image.open(self.path)
+                img.save(f"{Path(self.path).stem}_temp.png")
+                self.path = f"{Path(self.path).stem}_temp.png"
         if not Path(self.model_path).exists():
             print(f"❌ Trained model not found: {self.model_path}")
             print(f"💡 Run train_yolo.py first!")
@@ -244,46 +250,59 @@ Rules:
                     )
                     output = response.parsed
                 else:
-                    response = ollama.chat(
-                        model=self.model_name,
-                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
-                        format=get_solution.model_json_schema(),
-                        options={"num_ctx": 8192},
-                        stream=True
-                    )
-                    full_response = ""
-                    thinking = ""
-                    finished = True
-                    for chunk in response:
-                        if chunk.message.content:
-                            full_response += chunk.message.content
-                            print(chunk.message.content, end="", flush=True)
-                        elif chunk.message.thinking:
-                            print(chunk.message.thinking, end="", flush=True)
-                            thinking += chunk.message.thinking
-                            if len(thinking) > 12000:
-                                if "\n\n" in thinking.strip()[-10:]:
-                                    thinking = thinking.split("\n\n")[0]
-                                    del response
-                                    print(len(thinking))
-                                    finished = False
-                                    break
-                    
-                    if not finished:
-                        final_response = ollama.chat(
-                            model=self.model_name.replace("thinking", "instruct"),
-                            messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]},
-                                      {"role": "assistant", "content": thinking}],
+                    if self.model_name == "qwen3-vl:8b-thinking":
+                        print("⚠️ Using qwen3-vl:8b-thinking - this model has a very small context window for thinking (512 tokens). If you have many gaps, it may not be able to provide all solutions in one go. In that case, it will output a partial response with the first solutions and a 'thinking' message with the rest. The final solutions can then be obtained by sending the 'thinking' message back to the model with the same prompt. For better results with many gaps, consider using a model with a larger thinking context (e.g. gemini-3-flash-preview).")
+                        response = ollama.chat(
+                            model=self.model_name,
+                            messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
                             format=get_solution.model_json_schema(),
-                            options={"num_ctx": 8192}
+                            options={"num_ctx": 8192},
+                            stream=True
                         )
+                        full_response = ""
+                        thinking = ""
+                        finished = True
+                        for chunk in response:
+                            if chunk.message.content:
+                                full_response += chunk.message.content
+                                print(chunk.message.content, end="", flush=True)
+                            elif chunk.message.thinking:
+                                print(chunk.message.thinking, end="", flush=True)
+                                thinking += chunk.message.thinking
+                                if len(thinking) > 12000:
+                                    if "\n\n" in thinking.strip()[-10:]:
+                                        thinking = thinking.split("\n\n")[0]
+                                        del response
+                                        print(len(thinking))
+                                        finished = False
+                                        break
+                        
+                        if not finished:
+                            final_response = ollama.chat(
+                                model=self.model_name.replace("thinking", "instruct"),
+                                messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]},
+                                        {"role": "assistant", "content": thinking}],
+                                format=get_solution.model_json_schema(),
+                                options={"num_ctx": 8192}
+                            )
 
-                        output = get_solution.model_validate_json(final_response.message.content)
+                            output = get_solution.model_validate_json(final_response.message.content)
+                        else:
+                            output = get_solution.model_validate_json(full_response)
                     else:
-                        output = get_solution.model_validate_json(full_response)
+                        response = ollama.chat(
+                            model=self.model_name,
+                            messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
+                            format=get_solution.model_json_schema(),
+                            # options={"num_ctx": 8192}
+                        )
+                        output = get_solution.model_validate_json(response.message.content)
             else:
                 pass # Step 3 VL integration
             
+            if os.path.exists(self.path) and self.path.endswith("_temp.png"):
+                os.remove(self.path)
+
             return output
 
         except Exception as e:
