@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
+import time
 
 # Define Pydantic models outside the class
 class Pair(BaseModel):
@@ -218,12 +219,13 @@ class WorksheetSolver():
     
     def ask_ollama_about_all_gaps(self, marked_image):
         """Ask Gemini about the content of ALL gaps at once - just like test3"""
-        try:
-            # Save the marked image (with boxes) just as test3 expects
-            marked_image_path = f"{Path(self.path).stem}_marked.png"
-            cv2.imwrite(marked_image_path, marked_image)
+        if self.debug:
+            start_time = time.time()
+        # Save the marked image (with boxes) just as test3 expects
+        marked_image_path = f"{Path(self.path).stem}_marked.png"
+        cv2.imwrite(marked_image_path, marked_image)
 
-            prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.detected_gaps)} gaps, one without markings.
+        prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.detected_gaps)} gaps, one without markings.
 
 For each red box, read its number label and fill in the missing word(s) from the worksheet.
 
@@ -236,84 +238,83 @@ Rules:
 - Look at the sheets carefully and use them as context for your answers.
 - Output in JSON format: {{"solutions": [{{"key": box_number, "value": answer}}]}}"""
 
-            if not self.experimental:
-                if not self.local:
-                    image = Image.open(marked_image_path)
-                    original_image = Image.open(self.path)
-                    response = self.client.models.generate_content(
+        if not self.experimental:
+            if not self.local:
+                image = Image.open(marked_image_path)
+                original_image = Image.open(self.path)
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=[image, original_image, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=get_solution,
+                        thinking_config=types.ThinkingConfig(thinking_budget=512),
+                    ),
+                )
+                output = response.parsed
+            else:
+                if self.model_name == "qwen3-vl:8b-thinking":
+                    print("⚠️ Using qwen3-vl:8b-thinking - this model has a very small context window for thinking (512 tokens). If you have many gaps, it may not be able to provide all solutions in one go. In that case, it will output a partial response with the first solutions and a 'thinking' message with the rest. The final solutions can then be obtained by sending the 'thinking' message back to the model with the same prompt. For better results with many gaps, consider using a model with a larger thinking context (e.g. gemini-3-flash-preview).")
+                    response = ollama.chat(
                         model=self.model_name,
-                        contents=[image, original_image, prompt],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=get_solution,
-                            thinking_config=types.ThinkingConfig(thinking_budget=512),
-                        ),
+                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
+                        format=get_solution.model_json_schema(),
+                        options={"num_ctx": 8192},
+                        stream=True
                     )
-                    output = response.parsed
-                else:
-                    if self.model_name == "qwen3-vl:8b-thinking":
-                        print("⚠️ Using qwen3-vl:8b-thinking - this model has a very small context window for thinking (512 tokens). If you have many gaps, it may not be able to provide all solutions in one go. In that case, it will output a partial response with the first solutions and a 'thinking' message with the rest. The final solutions can then be obtained by sending the 'thinking' message back to the model with the same prompt. For better results with many gaps, consider using a model with a larger thinking context (e.g. gemini-3-flash-preview).")
-                        response = ollama.chat(
-                            model=self.model_name,
-                            messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
+                    full_response = ""
+                    thinking = ""
+                    finished = True
+                    for chunk in response:
+                        if chunk.message.content:
+                            full_response += chunk.message.content
+                            print(chunk.message.content, end="", flush=True)
+                        elif chunk.message.thinking:
+                            print(chunk.message.thinking, end="", flush=True)
+                            thinking += chunk.message.thinking
+                            if len(thinking) > 12000:
+                                if "\n\n" in thinking.strip()[-10:]:
+                                    thinking = thinking.split("\n\n")[0]
+                                    del response
+                                    print(len(thinking))
+                                    finished = False
+                                    break
+                    
+                    if not finished:
+                        final_response = ollama.chat(
+                            model=self.model_name.replace("thinking", "instruct"),
+                            messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]},
+                                    {"role": "assistant", "content": thinking}],
                             format=get_solution.model_json_schema(),
-                            options={"num_ctx": 8192},
-                            stream=True
+                            options={"num_ctx": 8192}
                         )
-                        full_response = ""
-                        thinking = ""
-                        finished = True
-                        for chunk in response:
-                            if chunk.message.content:
-                                full_response += chunk.message.content
-                                print(chunk.message.content, end="", flush=True)
-                            elif chunk.message.thinking:
-                                print(chunk.message.thinking, end="", flush=True)
-                                thinking += chunk.message.thinking
-                                if len(thinking) > 12000:
-                                    if "\n\n" in thinking.strip()[-10:]:
-                                        thinking = thinking.split("\n\n")[0]
-                                        del response
-                                        print(len(thinking))
-                                        finished = False
-                                        break
-                        
-                        if not finished:
-                            final_response = ollama.chat(
-                                model=self.model_name.replace("thinking", "instruct"),
-                                messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]},
-                                        {"role": "assistant", "content": thinking}],
-                                format=get_solution.model_json_schema(),
-                                options={"num_ctx": 8192}
-                            )
 
-                            output = get_solution.model_validate_json(final_response.message.content)
-                        else:
-                            output = get_solution.model_validate_json(full_response)
+                        output = get_solution.model_validate_json(final_response.message.content)
                     else:
-                        response = ollama.chat(
-                            model=self.model_name,
-                            messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
-                            format=get_solution.model_json_schema(),
-                            # options={"num_ctx": 8192}
-                        )
-                        output = get_solution.model_validate_json(response.message.content)
-            else:
-                pass # Step 3 VL integration
-            
-            if not self.debug:
-                if os.path.exists(self.path) and self.path.endswith("_temp.png"):
-                    os.remove(self.path)
-                if os.path.exists(marked_image_path):
-                    os.remove(marked_image_path)
-            else:
-                print(f"AI output:\n{output}")
+                        output = get_solution.model_validate_json(full_response)
+                else:
+                    response = ollama.chat(
+                        model=self.model_name,
+                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
+                        format=get_solution.model_json_schema(),
+                        # options={"num_ctx": 8192}
+                    )
+                    output = get_solution.model_validate_json(response.message.content)
+        else:
+            pass # Step 3 VL integration
+        
+        if not self.debug:
+            if os.path.exists(self.path) and self.path.endswith("_temp.png"):
+                os.remove(self.path)
+            if os.path.exists(marked_image_path):
+                os.remove(marked_image_path)
+        else:  
+            print(f"⏱️ Debug mode ON - timing enabled")
+            end_time = time.time()
+            print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
+            print(f"AI output:\n{output}")
 
-            return output
-
-        except Exception as e:
-            print(f"Error in Ollama request: {str(e)}")
-            return None
+        return output
     
     def solve_all_gaps(self, marked_image):
         """Solve all detected gaps with Ollama - structured!"""
@@ -418,8 +419,8 @@ Rules:
 # Main program
 def main():
     path = input("📂 Please enter the path to the worksheet image: ").strip()
-    # Best results with gemini-3-flash-preview (local: mistral-small-3.2 for 16 GB VRAM)
-    solver = WorksheetSolver(path) # , llm_model_name="mistral-small-3.2", local=True)
+    # Best results with gemini-3-flash-preview (local: qwen3-vl:30b or mistral-small-3.2 for 16 GB VRAM)
+    solver = WorksheetSolver(path, llm_model_name="qwen3-vl:30b", local=True) # , llm_model_name="mistral-small-3.2", local=True)
     
     print("🔍 Loading image and detecting gaps...")
     try:
