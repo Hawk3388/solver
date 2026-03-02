@@ -217,7 +217,7 @@ class WorksheetSolver():
             cv2.putText(image, label, (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         return image
     
-    def ask_ollama_about_all_gaps(self, marked_image):
+    def ask_ai_about_all_gaps(self, marked_image):
         """Ask Gemini about the content of ALL gaps at once - just like test3"""
         if self.debug:
             start_time = time.time()
@@ -248,13 +248,13 @@ Rules:
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=get_solution,
-                        thinking_config=types.ThinkingConfig(thinking_budget=512),
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
                     ),
                 )
                 output = response.parsed
             else:
                 if self.model_name == "qwen3-vl:8b-thinking":
-                    print("⚠️ Using qwen3-vl:8b-thinking - this model has a very small context window for thinking (512 tokens). If you have many gaps, it may not be able to provide all solutions in one go. In that case, it will output a partial response with the first solutions and a 'thinking' message with the rest. The final solutions can then be obtained by sending the 'thinking' message back to the model with the same prompt. For better results with many gaps, consider using a model with a larger thinking context (e.g. gemini-3-flash-preview).")
+                    print("you are using an experimantal thinking model - we will stream the response and switch to an instruct model if it seems to get stuck in thinking mode")
                     response = ollama.chat(
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
@@ -297,7 +297,7 @@ Rules:
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
                         format=get_solution.model_json_schema(),
-                        # options={"num_ctx": 8192}
+                        options={"num_ctx": 8192, "temperature": 1.0, "repeat_penalty": 1.3}
                     )
                     output = get_solution.model_validate_json(response.message.content)
         else:
@@ -326,7 +326,7 @@ Rules:
         
         # Ask Ollama about all gaps at once
         print("📤 Sending image to Ollama...")
-        solutions_data = self.ask_ollama_about_all_gaps(marked_image)
+        solutions_data = self.ask_ai_about_all_gaps(marked_image)
         
         if solutions_data:
             print("📥 Structured Ollama response received!")
@@ -420,7 +420,8 @@ Rules:
 def main():
     path = input("📂 Please enter the path to the worksheet image: ").strip()
     # Best results with gemini-3-flash-preview (local: qwen3-vl:30b or mistral-small-3.2 for 16 GB VRAM)
-    solver = WorksheetSolver(path) # , llm_model_name="qwen3-vl:30b", local=True)
+    # For gemini you have to use an API-key
+    solver = WorksheetSolver(path) # , llm_model_name="qwen3-vl:30b", local=True, debug=True)
     
     print("🔍 Loading image and detecting gaps...")
     try:
@@ -451,7 +452,7 @@ def main():
             else:
                 print("❌ No solutions received.")
         else:
-            print("📁 Gap detection only - Press any key to exit...")
+            print("📁 Gap detection only")
         
     except FileNotFoundError as e:
         print(f"❌ Error: {e}")
