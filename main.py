@@ -418,6 +418,7 @@ Rules:
 
 # Main program
 def main():
+    ask = False
     path = input("📂 Please enter the path to the worksheet image: ").strip()
     # Best results with gemini-3-flash-preview (local: qwen3-vl:30b or mistral-small-3.2 for 16 GB VRAM)
     # For gemini you have to use an API-key
@@ -435,10 +436,15 @@ def main():
         for i, gap in enumerate(gaps):
             print(f"  Gap {i+1}: {gap}")
         
-        # Ask user if AI analysis is desired
-        user_input = input("\n🤖 Should an AI analyze and fill the gaps? (y/n): ").lower().strip()
-        
-        if user_input in ['y', 'yes']:
+        if solver.debug:
+            # Ask user if AI analysis is desired
+            user_input = input("\n🤖 Should an AI analyze and fill the gaps? (y/n): ").lower().strip()
+            if user_input in ['y', 'yes']:
+                ask = True
+        else:
+            ask = True
+
+        if ask:
             solutions = solver.solve_all_gaps(marked_image)
             
             if solutions:
