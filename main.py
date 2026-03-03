@@ -420,9 +420,13 @@ Rules:
 def main():
     ask = False
     path = input("📂 Please enter the path to the worksheet image: ").strip()
-    # Best results with gemini-3-flash-preview (local: qwen3-vl:30b or mistral-small-3.2 for 16 GB VRAM)
-    # For gemini you have to use an API-key
-    solver = WorksheetSolver(path) # , llm_model_name="qwen3-vl:30b", local=True, debug=True)
+    llm_model_name = "qwen3.5"
+    local = True
+    debug = True
+    # Best results with gemini-3-flash-preview (local: qwen3.5 for 16 GB VRAM)
+    # For gemini you have to use an API-key with a .env file
+    # For Ollama models you have to set local=True
+    solver = WorksheetSolver(path, llm_model_name=llm_model_name, local=local, debug=debug)
     
     print("🔍 Loading image and detecting gaps...")
     try:
