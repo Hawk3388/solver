@@ -222,6 +222,7 @@ class WorksheetSolver():
         if self.debug:
             start_time = time.time()
         # Save the marked image (with boxes) just as test3 expects
+        thinking = None
         marked_image_path = f"{Path(self.path).stem}_marked.png"
         cv2.imwrite(marked_image_path, marked_image)
 
@@ -236,7 +237,7 @@ Rules:
 - If a box doesn't need filling, because it is already filled or is not a gap, answer with "none".
 - Do NOT overthink. These are simple language exercises. Answer quickly and directly. Only reason for about 10 sentences.
 - Look at the sheets carefully and use them as context for your answers.
-- Output in JSON format: {{"solutions": [{{"key": box_number, "value": answer}}]}}"""
+- Only answer in this exact JSON format: {{"solutions": [{{"key": box_number, "value": answer}}]}}"""
 
         if not self.experimental:
             if not self.local:
@@ -297,9 +298,22 @@ Rules:
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
                         format=get_solution.model_json_schema(),
-                        options={"num_ctx": 8192, "temperature": 1.0, "repeat_penalty": 1.3}
+                        think=False,
+                        options={"num_ctx": 8192}
                     )
-                    output = get_solution.model_validate_json(response.message.content)
+                    if response.message.thinking:
+                        thinking = response.message.thinking
+                    try:
+                        output = get_solution.model_validate_json(response.message.content)
+                    except Exception as e:
+                        print(f"Error validating JSON response: {e}")
+                        if self.debug:
+                            if thinking:
+                                print(f"Thinking content:\n{thinking}")
+                            print(f"Full response content:\n{response.message.content}")
+                            print(f"⏱️ Debug mode ON - timing enabled")
+                            end_time = time.time()
+                            print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
         else:
             pass # Step 3 VL integration
         
@@ -312,6 +326,8 @@ Rules:
             print(f"⏱️ Debug mode ON - timing enabled")
             end_time = time.time()
             print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
+            if thinking:
+                print(f"Thinking: {thinking}")
             print(f"AI output:\n{output}")
 
         return output
@@ -418,14 +434,15 @@ Rules:
 
 # Main program
 def main():
+    # Best results with gemini-3-flash-preview (local: qwen3.5 for 16 GB VRAM)
+    # For Gemini you have to use a Google API-key in a .env file
+    # For Ollama models you have to set local=True
     ask = False
+
     path = input("📂 Please enter the path to the worksheet image: ").strip()
     llm_model_name = "qwen3.5"
     local = True
     debug = True
-    # Best results with gemini-3-flash-preview (local: qwen3.5 for 16 GB VRAM)
-    # For gemini you have to use an API-key with a .env file
-    # For Ollama models you have to set local=True
     solver = WorksheetSolver(path, llm_model_name=llm_model_name, local=local, debug=debug)
     
     print("🔍 Loading image and detecting gaps...")
@@ -473,4 +490,5 @@ if __name__ == "__main__":
     main()
 
 # TODO:
+# - better image detection with support for more kinds of worksheets
 # - Add support for multiple files (batch processing)
