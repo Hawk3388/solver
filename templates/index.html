@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Worksheet Solver</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #fff;
+            margin-bottom: 30px;
+            font-size: 2.2rem;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .main-wrapper {
+            display: flex;
+            gap: 30px;
+            width: 100%;
+            max-width: 1100px;
+            align-items: flex-start;
+        }
+
+        .panel {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            flex: 1;
+            min-width: 0;
+        }
+
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        .file-input {
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .file-input:hover {
+            background: #e9ecef;
+            border-color: #667eea;
+        }
+
+        .file-input input[type="file"] {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .file-name {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #667eea;
+            font-weight: 500;
+        }
+
+        .preview-img {
+            width: 100%;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+
+        .submit-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+        }
+
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+        }
+
+        .submit-btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .download-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #38b249 0%, #2d8f3c 100%);
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+            margin-top: 15px;
+            display: none;
+            text-decoration: none;
+            text-align: center;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .result-area {
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .result-placeholder {
+            color: #aaa;
+            font-size: 14px;
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .result-img {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid #e1e5e9;
+            display: none;
+        }
+
+        /* Spinner */
+        .spinner-wrapper {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            padding: 40px 0;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #e1e5e9;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .spinner-text {
+            color: #667eea;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .error-msg {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #f5c6cb;
+            margin-bottom: 15px;
+            display: none;
+            text-align: center;
+        }
+
+        .info-text {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.8);
+            text-align: center;
+            margin-top: 20px;
+            line-height: 1.6;
+            max-width: 1100px;
+        }
+
+        @media (max-width: 768px) {
+            .main-wrapper {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>📝 Worksheet Solver</h1>
+
+    <div class="main-wrapper">
+        <!-- Left: Upload -->
+        <div class="panel">
+            <div class="panel-title">Upload Original</div>
+
+            <div class="error-msg" id="error-msg"></div>
+
+            <div class="form-group" id="upload-group">
+                <label for="file">Worksheet (Image):</label>
+                <div class="file-input" onclick="document.getElementById('file').click()">
+                    <div>📁 Click here to select an image</div>
+                    <input type="file" id="file" name="file" accept="image/*">
+                </div>
+            </div>
+
+            <img class="preview-img" id="preview-img" alt="Preview" style="cursor:pointer" onclick="document.getElementById('file').click()" title="Click to change image">
+
+            <button class="submit-btn" id="solve-btn" onclick="solveWorksheet()">Solve</button>
+        </div>
+
+        <!-- Right: Result -->
+        <div class="panel">
+            <div class="panel-title">Solution</div>
+
+            <div class="result-area">
+                <div class="result-placeholder" id="result-placeholder">
+                    The solved worksheet will appear here once the AI is done.
+                </div>
+
+                <div class="spinner-wrapper" id="spinner">
+                    <div class="spinner"></div>
+                    <div class="spinner-text">AI is solving the worksheet...</div>
+                </div>
+
+                <img class="result-img" id="result-img" alt="Solved Worksheet">
+            </div>
+
+            <a class="download-btn" id="download-btn" download="worksheet_solved.png">⬇ Download Solution</a>
+        </div>
+    </div>
+
+    <div class="info-text">
+        <strong>How it works:</strong>
+        Upload an image of a worksheet with gaps &bull; The AI detects the gaps and fills them in automatically &bull; Download the solved worksheet as a PNG
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('file');
+        const previewImg = document.getElementById('preview-img');
+        const fileNameDisplay = document.getElementById('file-name');
+
+        fileInput.addEventListener('change', function () {
+            if (this.files && this.files[0]) {
+                document.getElementById('upload-group').style.display = 'none';
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    previewImg.src = e.target.result;
+                    previewImg.style.display = 'block';
+                };
+                reader.readAsDataURL(this.files[0]);
+            }
+        });
+
+        async function solveWorksheet() {
+            const file = fileInput.files[0];
+            if (!file) {
+                showError('Please select an image first.');
+                return;
+            }
+
+            const btn = document.getElementById('solve-btn');
+            const spinner = document.getElementById('spinner');
+            const placeholder = document.getElementById('result-placeholder');
+            const resultImg = document.getElementById('result-img');
+            const downloadBtn = document.getElementById('download-btn');
+            const errorMsg = document.getElementById('error-msg');
+
+            // Reset
+            errorMsg.style.display = 'none';
+            resultImg.style.display = 'none';
+            downloadBtn.style.display = 'none';
+            placeholder.style.display = 'none';
+            spinner.style.display = 'flex';
+            btn.disabled = true;
+            btn.textContent = 'Solving...';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/solve', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok || data.error) {
+                    showError(data.error || 'An unknown error occurred.');
+                    placeholder.style.display = 'block';
+                } else {
+                    const src = 'data:image/png;base64,' + data.image;
+                    resultImg.src = src;
+                    resultImg.style.display = 'block';
+                    downloadBtn.href = src;
+                    downloadBtn.style.display = 'block';
+                }
+            } catch (err) {
+                showError('Connection error: ' + err.message);
+                placeholder.style.display = 'block';
+            } finally {
+                spinner.style.display = 'none';
+                btn.disabled = false;
+                btn.textContent = 'Solve';
+            }
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('error-msg');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

@@ -250,7 +250,7 @@ Rules:
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=get_solution,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024 if self.think else 0),
+                        thinking_config=types.ThinkingConfig(thinking_budget=2048 if self.think else 0),
                     ),
                 )
                 output = response.parsed
