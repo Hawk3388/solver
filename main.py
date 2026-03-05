@@ -21,12 +21,13 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, yolo_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", local: bool = False, debug: bool = False, experimental: bool = False):
+    def __init__(self, path:str, yolo_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, debug: bool = False, experimental: bool = False):
         self.model_path = yolo_model_path
         self.model_name = llm_model_name
         self.local = local
         self.path = path
         self.debug = debug
+        self.think = think
         self.experimental = experimental
         if not Path(self.path).exists():
             print(f"❌ Worksheet image not found: {self.path}")
@@ -249,12 +250,12 @@ Rules:
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=get_solution,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024 if self.think else 0),
                     ),
                 )
                 output = response.parsed
             else:
-                if self.model_name == "qwen3-vl:8b-thinking":
+                if self.model_name == "qwen3-vl:8b-thinking" and self.think:
                     print("you are using an experimantal thinking model - we will stream the response and switch to an instruct model if it seems to get stuck in thinking mode")
                     response = ollama.chat(
                         model=self.model_name,
@@ -298,7 +299,7 @@ Rules:
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
                         format=get_solution.model_json_schema(),
-                        # think=False,
+                        think=None if not 'thinking' in ollama.show(self.model_name).capabilities else True if self.think else False,
                         options={"num_ctx": 8192}
                     )
                     if response.message.thinking:
@@ -315,7 +316,7 @@ Rules:
                             end_time = time.time()
                             print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
         else:
-            pass # Step 3 VL integration
+            pass # Custom model integration for testing
         
         if not self.debug:
             if os.path.exists(self.path) and self.path.endswith("_temp.png"):
@@ -440,9 +441,10 @@ def main():
 
     path = input("📂 Please enter the path to the worksheet image: ").strip()
     llm_model_name = "qwen3.5:35b"
+    think = True
     local = True
     debug = True
-    solver = WorksheetSolver(path, llm_model_name=llm_model_name, local=local, debug=debug)
+    solver = WorksheetSolver(path, llm_model_name=llm_model_name, think=think, local=local, debug=debug)
 
     ask = False
     print("🔍 Loading image and detecting gaps...")
