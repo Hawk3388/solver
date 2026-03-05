@@ -298,7 +298,7 @@ Rules:
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
                         format=get_solution.model_json_schema(),
-                        think=False,
+                        # think=False,
                         options={"num_ctx": 8192}
                     )
                     if response.message.thinking:
@@ -434,17 +434,17 @@ Rules:
 
 # Main program
 def main():
-    # Best results with gemini-3-flash-preview (local: qwen3.5 for 16 GB VRAM)
+    # Best results with gemini-3-flash-preview (local: qwen3.5:35b for 16 GB VRAM + 32 GB RAM)
     # For Gemini you have to use a Google API-key in a .env file
     # For Ollama models you have to set local=True
-    ask = False
 
     path = input("📂 Please enter the path to the worksheet image: ").strip()
-    llm_model_name = "qwen3.5"
+    llm_model_name = "qwen3.5:35b"
     local = True
     debug = True
     solver = WorksheetSolver(path, llm_model_name=llm_model_name, local=local, debug=debug)
-    
+
+    ask = False
     print("🔍 Loading image and detecting gaps...")
     try:
         gaps, img = solver.detect_gaps()
