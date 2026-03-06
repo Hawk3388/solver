@@ -36,7 +36,7 @@ def solve():
     try:
         file.save(input_path)
 
-        solver = WorksheetSolver(input_path)
+        solver = WorksheetSolver(input_path, llm_model_name="qwen3.5:35b", local=True)
         gaps, img = solver.detect_gaps()
 
         if not gaps:
@@ -70,4 +70,4 @@ def solve():
             pass
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
