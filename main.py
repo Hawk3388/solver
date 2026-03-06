@@ -21,8 +21,8 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, yolo_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, debug: bool = False, experimental: bool = False):
-        self.model_path = yolo_model_path
+    def __init__(self, path:str, gap_detection_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, debug: bool = False, experimental: bool = False):
+        self.model_path = gap_detection_model_path
         self.model_name = llm_model_name
         self.local = local
         self.path = path
