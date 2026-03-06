@@ -36,7 +36,7 @@ def solve():
     try:
         file.save(input_path)
 
-        solver = WorksheetSolver(input_path, llm_model_name="qwen3.5:35b", local=True)
+        solver = WorksheetSolver(input_path)
         gaps, img = solver.detect_gaps()
 
         if not gaps:
