@@ -48,7 +48,19 @@ def solve():
     try:
         file.save(input_path)
 
-        solver = WorksheetSolver(input_path, gap_detection_model_path=GAP_DETECTION_MODEL_PATH)
+        model_name = request.form.get('model_name', 'gemini-2.5-flash')
+        local = request.form.get('local', 'false') == 'true'
+        think = request.form.get('think', 'true') == 'true'
+        debug = request.form.get('debug', 'false') == 'true'
+
+        solver = WorksheetSolver(
+            input_path,
+            yolo_model_path=GAP_DETECTION_MODEL_PATH,
+            llm_model_name=model_name,
+            think=think,
+            local=local,
+            debug=debug
+        )
         gaps, img = solver.detect_gaps()
 
         if not gaps:

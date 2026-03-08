@@ -221,9 +221,186 @@
             max-width: 1100px;
         }
 
+        /* Settings Slider */
+        .settings-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            border: none;
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            font-size: 22px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+            z-index: 1001;
+            transition: transform 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .settings-toggle:hover {
+            transform: scale(1.1);
+        }
+
+        .settings-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            z-index: 999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .settings-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .settings-panel {
+            position: fixed;
+            top: 0;
+            right: -380px;
+            width: 360px;
+            height: 100%;
+            background: white;
+            box-shadow: -5px 0 30px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            transition: right 0.3s ease;
+            overflow-y: auto;
+            padding: 30px;
+        }
+
+        .settings-panel.open {
+            right: 0;
+        }
+
+        .settings-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .setting-group {
+            margin-bottom: 22px;
+        }
+
+        .setting-group label {
+            display: block;
+            margin-bottom: 6px;
+            color: #555;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .setting-group .setting-desc {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 8px;
+        }
+
+        .setting-group input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+            font-family: inherit;
+        }
+
+        .setting-group input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .toggle-switch .toggle-label {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toggle-switch .toggle-label span:first-child {
+            font-weight: 600;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .toggle-switch .toggle-label span:last-child {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .switch {
+            position: relative;
+            width: 48px;
+            height: 26px;
+            flex-shrink: 0;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .switch-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #ccc;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+
+        .switch-slider:before {
+            content: "";
+            position: absolute;
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+
+        .switch input:checked + .switch-slider {
+            background: #667eea;
+        }
+
+        .switch input:checked + .switch-slider:before {
+            transform: translateX(22px);
+        }
+
+        .settings-divider {
+            height: 1px;
+            background: #eee;
+            margin: 20px 0;
+        }
+
         @media (max-width: 768px) {
             .main-wrapper {
                 flex-direction: column;
+            }
+            .settings-panel {
+                width: 300px;
+                right: -320px;
             }
         }
     </style>
@@ -269,6 +446,68 @@
             </div>
 
             <a class="download-btn" id="download-btn" download="worksheet_solved.png">⬇ Download Solution</a>
+        </div>
+    </div>
+
+    <!-- Settings Toggle Button -->
+    <button class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Settings">⚙️</button>
+
+    <!-- Settings Overlay -->
+    <div class="settings-overlay" id="settings-overlay" onclick="toggleSettings()"></div>
+
+    <!-- Settings Panel -->
+    <div class="settings-panel" id="settings-panel">
+        <div class="settings-title">⚙️ Settings</div>
+
+        <div class="setting-group">
+            <label for="model-name">LLM Model Name</label>
+            <div class="setting-desc">e.g. gemini-2.5-flash, qwen3.5:35b</div>
+            <input type="text" id="model-name" value="gemini-2.5-flash">
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group">
+            <div class="toggle-switch">
+                <div class="toggle-label">
+                    <span>Local Mode</span>
+                    <span>Use a local Ollama model instead of Gemini API</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="local-mode">
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group">
+            <div class="toggle-switch">
+                <div class="toggle-label">
+                    <span>Thinking</span>
+                    <span>Allow the model to reason before answering</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="thinking" checked>
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group">
+            <div class="toggle-switch">
+                <div class="toggle-label">
+                    <span>Debug Mode</span>
+                    <span>Keep temp files and show timing info</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="debug-mode">
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
         </div>
     </div>
 
@@ -319,6 +558,10 @@
 
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('model_name', document.getElementById('model-name').value);
+            formData.append('local', document.getElementById('local-mode').checked);
+            formData.append('think', document.getElementById('thinking').checked);
+            formData.append('debug', document.getElementById('debug-mode').checked);
 
             try {
                 const response = await fetch('/solve', {
@@ -352,6 +595,11 @@
             const el = document.getElementById('error-msg');
             el.textContent = msg;
             el.style.display = 'block';
+        }
+
+        function toggleSettings() {
+            document.getElementById('settings-panel').classList.toggle('open');
+            document.getElementById('settings-overlay').classList.toggle('open');
         }
     </script>
 </body>
