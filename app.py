@@ -12,16 +12,16 @@ app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
 
-GAP_DETECTION_MODEL_PATH = "gap_detection_model.pt"
+GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
         
 if not os.path.exists(GAP_DETECTION_MODEL_PATH):
     url = "https://github.com/Hawk3388/solver/releases/download/v1.1.0/gap_detection_model.pt"
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
-        with open("gap_detection_model.pt", 'wb') as f:
+        with open("./model/gap_detection_model.pt", 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-    GAP_DETECTION_MODEL_PATH = "gap_detection_model.pt"
+    GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS

@@ -9,3 +9,8 @@ raw_images/
 arbeitsblatt_yolo/
 .vscode/
 __pycache__/
+*.onnx
+*.spec
+dist/
+build/
+model/

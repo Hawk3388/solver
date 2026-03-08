@@ -10,7 +10,6 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
-import time
 
 # Define Pydantic models outside the class
 class Pair(BaseModel):
@@ -21,7 +20,7 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, gap_detection_model_path: str = "gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, debug: bool = False, experimental: bool = False):
+    def __init__(self, path:str, gap_detection_model_path: str = "./model/gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, debug: bool = False, experimental: bool = False):
         self.model_path = gap_detection_model_path
         self.model_name = llm_model_name
         self.local = local
@@ -29,6 +28,10 @@ class WorksheetSolver():
         self.debug = debug
         self.think = think
         self.experimental = experimental
+        
+        if self.debug:
+            import time
+            self.time = time
         if not Path(self.path).exists():
             print(f"❌ Worksheet image not found: {self.path}")
             print(f"💡 Please check the path to the image and try again.")
@@ -221,7 +224,7 @@ class WorksheetSolver():
     def ask_ai_about_all_gaps(self, marked_image):
         """Ask Gemini about the content of ALL gaps at once - just like test3"""
         if self.debug:
-            start_time = time.time()
+            start_time = self.time.time()
         # Save the marked image (with boxes) just as test3 expects
         thinking = None
         marked_image_path = f"{Path(self.path).stem}_marked.png"
@@ -313,7 +316,7 @@ Rules:
                                 print(f"Thinking content:\n{thinking}")
                             print(f"Full response content:\n{response.message.content}")
                             print(f"⏱️ Debug mode ON - timing enabled")
-                            end_time = time.time()
+                            end_time = self.time.time()
                             print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
         else:
             pass # Custom model integration for testing
@@ -325,7 +328,7 @@ Rules:
                 os.remove(marked_image_path)
         else:  
             print(f"⏱️ Debug mode ON - timing enabled")
-            end_time = time.time()
+            end_time = self.time.time()
             print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
             if thinking:
                 print(f"Thinking: {thinking}")
@@ -494,3 +497,4 @@ if __name__ == "__main__":
 # TODO:
 # - better image detection with support for more kinds of worksheets
 # - Add support for multiple files (batch processing)
+# - Create an executable (.exe) for easy use without Python setup (Command: pyinstaller --onefile --add-data "templates:templates" --add-data "model:model" --hidden-import=main --name=solver app.py)
