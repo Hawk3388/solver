@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings('ignore')
 from main import WorksheetSolver
 import os
 import uuid

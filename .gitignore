@@ -10,8 +10,9 @@ arbeitsblatt_yolo/
 .vscode/
 __pycache__/
 *.onnx
-*.spec
 dist/
 build/
 model/
 venv/
+solver/
+*.zip

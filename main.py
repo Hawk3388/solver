@@ -497,4 +497,4 @@ if __name__ == "__main__":
 # TODO:
 # - better image detection with support for more kinds of worksheets
 # - Add support for multiple files (batch processing)
-# - Create an executable (.exe) for easy use without Python setup (Command: pyinstaller --onefile --add-data "templates:templates" --add-data "model:model" --hidden-import=main --name=solver app.py)
+# - Create an executable (.exe) for easy use without Python setup (Command: pyinstaller --onefile --add-data "templates:templates" --hidden-import=main --name=solver app.py)
