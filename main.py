@@ -20,12 +20,14 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, gap_detection_model_path: str = "./model/gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, debug: bool = False, experimental: bool = False):
+    def __init__(self, path:str, gap_detection_model_path: str = "./model/gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, thinking_budget: int = 2048, debug: bool = False, experimental: bool = False):
         self.model_path = gap_detection_model_path
         self.model_name = llm_model_name
         self.local = local
         self.path = path
         self.debug = debug
+        if think:
+            self.thinking_budget = thinking_budget
         self.think = think
         self.experimental = experimental
         
@@ -50,6 +52,83 @@ class WorksheetSolver():
         if not self.local and not self.experimental and os.path.exists(".env"):
             load_dotenv()
             self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        if self.experimental and self.local:
+
+            from transformers.generation import LogitsProcessor
+            from transformers import AutoTokenizer, pipeline, BitsAndBytesConfig
+            from lmformatenforcer import JsonSchemaParser
+            from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+            import torch
+
+            class ThinkingTokenBudgetProcessor(LogitsProcessor):
+                """
+                A processor where after a maximum number of tokens are generated,
+                a </think> token is added at the end to stop the thinking generation,
+                and then it will continue to generate the response.
+                """
+                def __init__(self, tokenizer, max_thinking_tokens=None):
+                    self.tokenizer = tokenizer
+                    self.max_thinking_tokens = max_thinking_tokens
+                    self.think_end_token = self.tokenizer.encode("</think>", add_special_tokens=False)[0]
+                    self.nl_token = self.tokenizer.encode("\n", add_special_tokens=False)[0]
+                    self.tokens_generated = 0
+                    self.stopped_thinking = False
+                    self.neg_inf = float('-inf')
+
+                def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+                    self.tokens_generated += 1
+                    if self.max_thinking_tokens == 0 and not self.stopped_thinking and self.tokens_generated > 0:
+                        scores[:] = self.neg_inf
+                        scores[0][self.nl_token] = 0
+                        scores[0][self.think_end_token] = 0
+                        self.stopped_thinking = True
+                        return scores
+
+                    if self.max_thinking_tokens is not None and not self.stopped_thinking:
+                        if (self.tokens_generated / self.max_thinking_tokens) > .95:
+                            scores[0][self.nl_token] = scores[0][self.think_end_token] * (1 + (self.tokens_generated / self.max_thinking_tokens))
+                            scores[0][self.think_end_token] = (
+                                scores[0][self.think_end_token] * (1 + (self.tokens_generated / self.max_thinking_tokens))
+                            )
+
+                        if self.tokens_generated >= (self.max_thinking_tokens - 1):
+                            if self.tokens_generated == self.max_thinking_tokens-1:
+                                scores[:] = self.neg_inf
+                                scores[0][self.nl_token] = 0
+                            else:
+                                scores[:] = self.neg_inf
+                                scores[0][self.think_end_token] = 0
+                                self.stopped_thinking = True
+
+                    return scores
+                
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+
+            tokenizer = AutoTokenizer.from_pretrained(self.model)
+
+            if self.think:
+                processor = ThinkingTokenBudgetProcessor(tokenizer, max_thinking_tokens=self.thinking_budget)
+            else:
+                # print("For the experimental mode thinking will be enabled")
+                processor = ThinkingTokenBudgetProcessor(tokenizer, max_thinking_tokens=self.thinking_budget)
+
+            schema_parser = JsonSchemaParser(get_solution.model_json_schema())
+            self.prefix_function = build_transformers_prefix_allowed_tokens_fn(tokenizer, schema_parser)
+
+            self.pipe = pipeline(
+                "image-text-to-text", 
+                model=self.model, 
+                max_new_tokens=4096, 
+                logits_processor=[processor], 
+                device=0,
+                model_kwargs={"quantization_config": quantization_config}
+            )
+
         self.model = YOLO(self.model_path)
         
         self.image = None
@@ -253,7 +332,7 @@ Rules:
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=get_solution,
-                        thinking_config=types.ThinkingConfig(thinking_budget=2048 if self.think else 0),
+                        thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
                     ),
                 )
                 output = response.parsed
@@ -319,7 +398,15 @@ Rules:
                             end_time = self.time.time()
                             print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
         else:
-            pass # Custom model integration for testing
+            if self.local:
+                messages = [{"role": "user", "content": [
+                    {"type": "image", "image_path": marked_image_path},
+                    {"type": "image", "image_path": self.path},
+                    {"type": "text", "text": prompt},
+                ]}]
+                response = self.pipe(messages, enable_thinking=self.think, prefix_allowed_tokens_fn=self.prefix_function)[0]["generated_text"][-1]["content"]
+                response = response.split("</think>")
+                output = get_solution.model_validate_json(response[-1])
         
         if not self.debug:
             if os.path.exists(self.path) and self.path.endswith("_temp.png"):
@@ -497,4 +584,4 @@ if __name__ == "__main__":
 # TODO:
 # - better image detection with support for more kinds of worksheets
 # - Add support for multiple files (batch processing)
-# - Create an executable (.exe) for easy use without Python setup (Command: pyinstaller --onefile --add-data "templates:templates" --hidden-import=main --name=solver app.py)
+# - Create an executable (.exe) for easy use without Python setup (Command: pyinstaller solver.spec)

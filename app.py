@@ -53,15 +53,19 @@ def solve():
         model_name = request.form.get('model_name', 'gemini-2.5-flash')
         local = request.form.get('local', 'false') == 'true'
         think = request.form.get('think', 'true') == 'true'
+        thinking_budget = int(request.form.get('thinking_budget', '2048'))
         debug = request.form.get('debug', 'false') == 'true'
+        experimental = request.form.get('experimental', 'false') == 'true'
 
         solver = WorksheetSolver(
             input_path,
-            yolo_model_path=GAP_DETECTION_MODEL_PATH,
+            gap_detection_model_path=GAP_DETECTION_MODEL_PATH,
             llm_model_name=model_name,
             think=think,
             local=local,
-            debug=debug
+            thinking_budget=thinking_budget,
+            debug=debug,
+            experimental=experimental
         )
         gaps, img = solver.detect_gaps()
 

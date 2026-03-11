@@ -394,6 +394,59 @@
             margin: 20px 0;
         }
 
+        .slider-control {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .slider-control.visible {
+            display: block;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .slider-value {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 5px;
+            background: #ddd;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+        }
+
         @media (max-width: 768px) {
             .main-wrapper {
                 flex-direction: column;
@@ -493,6 +546,14 @@
                     <span class="switch-slider"></span>
                 </label>
             </div>
+            
+            <div class="slider-control visible" id="thinking-budget-control">
+                <div class="slider-label">
+                    <span>Thinking Budget</span>
+                    <span class="slider-value" id="budget-value">2048</span>
+                </div>
+                <input type="range" id="thinking-budget" min="9" max="13" value="11" step="1">
+            </div>
         </div>
 
         <div class="settings-divider"></div>
@@ -505,6 +566,21 @@
                 </div>
                 <label class="switch">
                     <input type="checkbox" id="debug-mode">
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group">
+            <div class="toggle-switch">
+                <div class="toggle-label">
+                    <span>Experimental Mode</span>
+                    <span>Use transformers pipeline with format enforcement</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="experimental-mode">
                     <span class="switch-slider"></span>
                 </label>
             </div>
@@ -530,6 +606,26 @@
                     previewImg.style.display = 'block';
                 };
                 reader.readAsDataURL(this.files[0]);
+            }
+        });
+
+        // Thinking budget slider
+        const thinkingCheckbox = document.getElementById('thinking');
+        const budgetControl = document.getElementById('thinking-budget-control');
+        const budgetSlider = document.getElementById('thinking-budget');
+        const budgetValue = document.getElementById('budget-value');
+
+        // Update slider value display
+        budgetSlider.addEventListener('input', function() {
+            budgetValue.textContent = Math.pow(2, parseInt(this.value));
+        });
+
+        // Toggle budget slider visibility
+        thinkingCheckbox.addEventListener('change', function() {
+            if (this.checked) {
+                budgetControl.classList.add('visible');
+            } else {
+                budgetControl.classList.remove('visible');
             }
         });
 
@@ -561,7 +657,9 @@
             formData.append('model_name', document.getElementById('model-name').value);
             formData.append('local', document.getElementById('local-mode').checked);
             formData.append('think', document.getElementById('thinking').checked);
+            formData.append('thinking_budget', Math.pow(2, parseInt(document.getElementById('thinking-budget').value)));
             formData.append('debug', document.getElementById('debug-mode').checked);
+            formData.append('experimental', document.getElementById('experimental-mode').checked);
 
             try {
                 const response = await fetch('/solve', {
