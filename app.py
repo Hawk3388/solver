@@ -7,9 +7,11 @@ import base64
 import tempfile
 import requests
 from flask import Flask, render_template, request, jsonify
+from waitress import serve
+import socket
 from pathlib import Path
 
-app = Flask(__name__)
+app = Flask("solver")
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
@@ -100,4 +102,12 @@ def solve():
             pass
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    host = '0.0.0.0'
+    port = 5000
+    local_ip = socket.gethostbyname(socket.gethostname())
+    print(f" * Serving Flask app '{app.name}'")
+    print(f" * Running on all addresses ({host})")
+    print(f" * Running on http://127.0.0.1:{port}")
+    print(f" * Running on http://{local_ip}:{port}")
+    print("Press CTRL+C to quit")
+    serve(app, host=host, port=port)
