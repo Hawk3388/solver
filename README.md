@@ -4,7 +4,7 @@ An AI-powered tool that automatically detects and fills in blank gaps on languag
 
 ## How It Works
 
-1. **Gap Detection** — A fine-tuned YOLOv26 model scans the worksheet image and detects all fillable blank regions (`freie_stelle`).
+1. **Gap Detection** — A fine-tuned YOLOv26 model scans the worksheet image and detects all fillable blank regions (`gap`).
 2. **Overlap Filtering** — Overlapping detections are filtered using IoU-based non-maximum suppression, keeping only the highest-confidence boxes.
 3. **Reading Order Sorting** — Detected gaps are sorted in natural reading order (top-to-bottom, left-to-right within each line).
 4. **Gap Marking** — Gaps are numbered and highlighted with red bounding boxes on the image.
@@ -210,7 +210,7 @@ Exports the model for lightweight deployment with ONNX Runtime (CPU or GPU).
 
 The solver works with various fill-in-the-blank worksheet formats, including:
 
-- Cloze tests (Lückentexte)
+- Cloze tests
 - Grammar exercises (verb conjugation, articles, cases)
 - Vocabulary exercises
 - Reading comprehension worksheets
