@@ -52,10 +52,38 @@ An AI-powered tool that automatically detects and fills in blank gaps on languag
 ### Key Dependencies
 
 - [Ultralytics (YOLOv26)](https://github.com/ultralytics/ultralytics) — object detection
-- [Google GenAI SDK](https://pypi.org/project/google-genai/) — Gemini API client
+- [Google GenAI SDK](https://pypi.org/project/google-genai/) — Gemini API client (optional)
 - [Ollama](https://ollama.com/) — local LLM inference (optional)
 - [Flask](https://flask.palletsprojects.com/) — web interface
 - OpenCV, Pillow, PyTorch, NumPy, Pydantic
+
+## Web Interface
+
+```bash
+python app.py
+```
+
+Opens a server on `http://localhost:5000`. The web UI lets you:
+
+- Upload a worksheet image (PNG, JPG, JPEG, WEBP, BMP)
+- Configure model settings (model name, thinking mode, local/cloud)
+- View and download the solved worksheet
+
+The gap detection model is automatically downloaded from GitHub Releases if not present locally.
+
+### Web Interface — Standalone Executable
+
+1. Download and extract `solver.zip` from the [Releases](https://github.com/Hawk3388/solver/releases) page
+2. Rename `.env.example` to `.env` and paste your Google API key for cloud-based solving:
+
+   ```env
+   GOOGLE_API_KEY=your_gemini_api_key_here
+   ```
+
+   > Not required when using a local Ollama model.
+3. *(Optional)* Replace `model/gap_detection_model.pt` with a different model if needed
+4. Run `solver.exe` — a console window will appear with the server address
+5. Open the displayed URL (e.g. `http://127.0.0.1:5000`) in your browser
 
 ## Installation
 
@@ -97,20 +125,6 @@ You will be prompted to enter the path to a worksheet image. The tool will:
 2. Display the detected gap coordinates
 3. In debug mode, ask whether to solve them with the LLM
 4. Save the solved worksheet as `worksheet_solved.png`
-
-### Web Interface
-
-```bash
-python app.py
-```
-
-Opens a Flask server on `http://localhost:5000`. The web UI lets you:
-
-- Upload a worksheet image (PNG, JPG, JPEG, WEBP, BMP)
-- Configure model settings (model name, thinking mode, local/cloud)
-- View and download the solved worksheet
-
-The gap detection model is automatically downloaded from GitHub Releases if not present locally.
 
 ### Programmatic Usage
 
