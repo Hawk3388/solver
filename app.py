@@ -2,6 +2,7 @@ import warnings
 warnings.filterwarnings('ignore')
 from main import WorksheetSolver
 import os
+import sys
 import uuid
 import base64
 import tempfile
@@ -11,7 +12,12 @@ from waitress import serve
 import socket
 from pathlib import Path
 
-app = Flask("solver")
+if getattr(sys, 'frozen', False):
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask("solver", template_folder=os.path.join(base_path, 'templates'))
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
