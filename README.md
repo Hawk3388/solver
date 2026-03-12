@@ -2,6 +2,8 @@
 
 An AI-powered tool that automatically detects and fills in blank gaps on language worksheets (e.g., fill-in-the-blank, cloze tests, grammar exercises). It combines a custom-trained YOLO object detection model with a multimodal large language model (Google Gemini or a local Ollama model) to locate gaps and generate correct answers.
 
+![solver](solver.gif)
+
 ## How It Works
 
 1. **Gap Detection** — A fine-tuned YOLOv26 model scans the worksheet image and detects all fillable blank regions (`gap`).
