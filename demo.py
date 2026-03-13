@@ -45,15 +45,15 @@ def solve_worksheet(
 	experimental: bool,
 ):
 	if not image_path:
-		return None, "Bitte zuerst ein Bild hochladen."
+		raise gr.Error("Please upload an image first.")
 
 	if not _is_allowed_image(image_path):
-		return None, "Bitte ein gueltiges Bild hochladen (PNG, JPG, JPEG, WEBP, BMP)."
+		raise gr.Error("Please upload a valid image file (PNG, JPG, JPEG, WEBP, BMP).")
 
 	try:
 		model_path = ensure_gap_model()
 	except Exception as error:
-		return None, f"Konnte das Gap-Modell nicht laden: {error}"
+		raise gr.Error(f"Could not load the gap detection model: {error}") from error
 
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		unique_id = uuid.uuid4().hex
@@ -76,21 +76,21 @@ def solve_worksheet(
 
 			gaps, detected_image = solver.detect_gaps()
 			if not gaps:
-				return None, "Keine Luecken erkannt. Bitte ein klareres Arbeitsblatt testen."
+				raise gr.Error("No gaps were detected. Please try a clearer worksheet image.")
 
 			marked_image = solver.mark_gaps(detected_image, gaps)
 			solutions = solver.solve_all_gaps(marked_image)
 
 			if not solutions:
-				return None, "Die KI konnte keine Loesungen finden."
+				raise gr.Error("The AI could not find any solutions.")
 
 			solver.fill_gaps_in_image(input_path, solutions, output_path=output_path)
 
 			solved_image = Image.open(output_path).copy()
-			return solved_image, f"Fertig: {len(solutions)} Luecken geloest."
+			return solved_image
 
 		except Exception as error:
-			return None, f"Verarbeitungsfehler: {error}"
+			raise gr.Error(f"Processing error: {error}") from error
 
 
 def build_app() -> gr.Blocks:
@@ -104,7 +104,7 @@ def build_app() -> gr.Blocks:
 			"""
 			<div class='hero'>
 				<h1>Worksheet Solver</h1>
-				<p>Bild hochladen, Optionen setzen und das ausgefuellte Arbeitsblatt herunterladen.</p>
+				<p>Upload a worksheet image, configure the options, and generate the solved version.</p>
 			</div>
 			"""
 		)
@@ -113,14 +113,14 @@ def build_app() -> gr.Blocks:
 			with gr.Column(scale=1):
 				image_input = gr.Image(
 					type="filepath",
-					label="Arbeitsblatt (Bild)",
+					label="Worksheet Image",
 					sources=["upload"],
 				)
 
 				model_name = gr.Textbox(
 					label="LLM Model Name",
 					value="gemini-2.5-flash",
-					placeholder="z. B. gemini-2.5-flash oder qwen3.5:35b",
+					placeholder="e.g. gemini-2.5-flash or qwen3.5:35b",
 				)
 
 				with gr.Row():
@@ -133,7 +133,7 @@ def build_app() -> gr.Blocks:
 					step=1,
 					value=2048,
 					label="Thinking Budget",
-					info="Nur relevant, wenn Thinking aktiv ist.",
+					info="Only relevant when Thinking is enabled.",
 				)
 
 				with gr.Row():
@@ -143,8 +143,7 @@ def build_app() -> gr.Blocks:
 				solve_button = gr.Button("Solve", variant="primary")
 
 			with gr.Column(scale=1):
-				image_output = gr.Image(type="pil", label="Loesung")
-				status_output = gr.Textbox(label="Status", interactive=False)
+				image_output = gr.Image(type="pil", label="Solved Worksheet")
 
 		solve_button.click(
 			fn=solve_worksheet,
@@ -157,7 +156,7 @@ def build_app() -> gr.Blocks:
 				debug,
 				experimental,
 			],
-			outputs=[image_output, status_output],
+			outputs=image_output,
 		)
 
 	return demo
@@ -166,4 +165,4 @@ def build_app() -> gr.Blocks:
 demo = build_app()
 
 if __name__ == "__main__":
-	demo.queue().launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", "7860")))
+	demo.queue().launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", "7860")), share=True)
