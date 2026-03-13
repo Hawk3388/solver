@@ -16,3 +16,4 @@ model/
 venv/
 solver/
 *.zip
+gradio/

@@ -35,15 +35,7 @@ def _is_allowed_image(filename: str) -> bool:
 	return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def solve_worksheet(
-	image_path: str,
-	model_name: str,
-	local: bool,
-	think: bool,
-	thinking_budget: int,
-	debug: bool,
-	experimental: bool,
-):
+def solve_worksheet(image_path: str):
 	if not image_path:
 		raise gr.Error("Please upload an image first.")
 
@@ -66,12 +58,12 @@ def solve_worksheet(
 			solver = WorksheetSolver(
 				input_path,
 				gap_detection_model_path=model_path,
-				llm_model_name=model_name.strip() or "gemini-2.5-flash",
-				think=think,
-				local=local,
-				thinking_budget=int(thinking_budget),
-				debug=debug,
-				experimental=experimental,
+				llm_model_name="gemini-2.5-flash",
+				think=True,
+				local=False,
+				thinking_budget=1024,
+				debug=False,
+				experimental=False,
 			)
 
 			gaps, detected_image = solver.detect_gaps()
@@ -104,7 +96,7 @@ def build_app() -> gr.Blocks:
 			"""
 			<div class='hero'>
 				<h1>Worksheet Solver</h1>
-				<p>Upload a worksheet image, configure the options, and generate the solved version.</p>
+				<p>Upload a worksheet image and generate the solved version.</p>
 			</div>
 			"""
 		)
@@ -117,29 +109,6 @@ def build_app() -> gr.Blocks:
 					sources=["upload"],
 				)
 
-				model_name = gr.Textbox(
-					label="LLM Model Name",
-					value="gemini-2.5-flash",
-					placeholder="e.g. gemini-2.5-flash or qwen3.5:35b",
-				)
-
-				with gr.Row():
-					local = gr.Checkbox(label="Local Mode (Ollama)", value=False)
-					think = gr.Checkbox(label="Thinking", value=True)
-
-				thinking_budget = gr.Slider(
-					minimum=0,
-					maximum=8192,
-					step=1,
-					value=2048,
-					label="Thinking Budget",
-					info="Only relevant when Thinking is enabled.",
-				)
-
-				with gr.Row():
-					debug = gr.Checkbox(label="Debug Mode", value=False)
-					experimental = gr.Checkbox(label="Experimental Mode", value=False)
-
 				solve_button = gr.Button("Solve", variant="primary")
 
 			with gr.Column(scale=1):
@@ -147,15 +116,7 @@ def build_app() -> gr.Blocks:
 
 		solve_button.click(
 			fn=solve_worksheet,
-			inputs=[
-				image_input,
-				model_name,
-				local,
-				think,
-				thinking_budget,
-				debug,
-				experimental,
-			],
+			inputs=image_input,
 			outputs=image_output,
 		)
 
