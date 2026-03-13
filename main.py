@@ -50,10 +50,16 @@ class WorksheetSolver():
             print(f"\nIf available, change MODEL_PATH to the correct location")
             exit()
         if not self.local and not self.experimental:
-            if os.path.exists(".env"):
-                load_dotenv()
-                self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-            else:
+            try:
+                if os.path.exists(".env"):
+                    load_dotenv()
+                    self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+                elif os.getenv("GOOGLE_API_KEY"):
+                    self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+                else:
+                    print(f"❌ .env file with Google API key not found!")
+                    print(f"💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
+            except Exception:
                 print(f"❌ .env file with Google API key not found!")
                 print(f"💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
         if self.experimental and self.local:
