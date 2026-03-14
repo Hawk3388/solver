@@ -58,10 +58,10 @@ def solve_worksheet(image_path: str):
 			solver = WorksheetSolver(
 				input_path,
 				gap_detection_model_path=model_path,
-				llm_model_name="gemini-2.5-flash",
+				llm_model_name="gemini-3-flash-preview",
 				think=True,
 				local=False,
-				thinking_budget=1024,
+				thinking_budget=2048,
 				debug=False,
 				experimental=False,
 			)
