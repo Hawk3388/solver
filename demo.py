@@ -7,6 +7,7 @@ import re
 import gradio as gr
 import requests
 from PIL import Image
+from pathlib import Path
 
 from main import WorksheetSolver
 
@@ -18,30 +19,64 @@ RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
 
 
 def ensure_gap_model() -> str:
+	download = False
+
 	os.makedirs("./model", exist_ok=True)
-	if os.path.exists(GAP_DETECTION_MODEL_PATH):
-		return GAP_DETECTION_MODEL_PATH
+	folder_path = Path("./model")
+	model_folder_names = [p.name for p in folder_path.iterdir() if p.is_dir()]
+
+	if model_folder_names:
+		latest_version = sorted(model_folder_names, key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)[0]
+		model_path = folder_path / latest_version / "gap_detection_model.pt"
+		if not model_path.exists():
+			download = True
+	else:
+		download = True
 	
 	release_response = requests.get(RELEASES_URL)
 	if release_response.status_code == 200:
 		pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
 		versions = pattern.findall(release_response.text)
-		latest_version = versions[0] if versions else None
-		if not latest_version:
+		if not versions:
 			raise Exception("Could not determine the latest model version from GitHub releases.")
-		else:
-			GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{latest_version}/gap_detection_model.pt"
 	else:
 		raise Exception(f"Failed to fetch releases from GitHub: {release_response.status_code}")
 
-	with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
-		response.raise_for_status()
-		with open(GAP_DETECTION_MODEL_PATH, "wb") as model_file:
-			for chunk in response.iter_content(chunk_size=8192):
-				if chunk:
-					model_file.write(chunk)
+	for version in versions:
+		GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{version}/gap_detection_model.pt"
+		if not url_exists(GAP_MODEL_URL):
+			continue
+		if download:
+			with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+				with open(GAP_DETECTION_MODEL_PATH, "wb") as model_file:
+					for chunk in response.iter_content(chunk_size=8192):
+						if chunk:
+							model_file.write(chunk)
+			GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
+			break
+		else:
+			compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
+			newer_version = compare_versions[0]
+			if newer_version != latest_version:
+				with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+					with open(GAP_DETECTION_MODEL_PATH, "wb") as model_file:
+						for chunk in response.iter_content(chunk_size=8192):
+							if chunk:
+								model_file.write(chunk)
+				GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
+				break
+			else:
+				GAP_DETECTION_MODEL_PATH = str(model_path)
 
 	return GAP_DETECTION_MODEL_PATH
+
+
+def url_exists(url: str, timeout: float = 5.0) -> bool:
+    try:
+        r = requests.head(url, allow_redirects=True, timeout=timeout)
+        return (200 <= r.status_code < 400)
+    except requests.RequestException as e:
+        return False
 
 
 def _is_allowed_image(filename: str) -> bool:
