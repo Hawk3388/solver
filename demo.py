@@ -2,6 +2,7 @@ import os
 import tempfile
 import uuid
 import warnings
+import re
 
 import gradio as gr
 import requests
@@ -13,13 +14,25 @@ warnings.filterwarnings("ignore")
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
 GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
-GAP_MODEL_URL = "https://github.com/Hawk3388/solver/releases/download/v1.1.0/gap_detection_model.pt"
+RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
 
 
 def ensure_gap_model() -> str:
 	os.makedirs("./model", exist_ok=True)
 	if os.path.exists(GAP_DETECTION_MODEL_PATH):
 		return GAP_DETECTION_MODEL_PATH
+	
+	release_response = requests.get(RELEASES_URL)
+	if release_response.status_code == 200:
+		pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
+		versions = pattern.findall(release_response.text)
+		latest_version = versions[0] if versions else None
+		if not latest_version:
+			raise Exception("Could not determine the latest model version from GitHub releases.")
+		else:
+			GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{latest_version}/gap_detection_model.pt"
+	else:
+		raise Exception(f"Failed to fetch releases from GitHub: {release_response.status_code}")
 
 	with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
 		response.raise_for_status()
