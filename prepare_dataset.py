@@ -210,7 +210,7 @@ def boxes_to_yolo_format(boxes, image_width, image_height):
         height_norm = h / image_height
         
         # YOLO Format: class_id x_center y_center width height
-        # class_id = 0 (nur eine Klasse: freie_stelle)
+        # class_id = 0 (nur eine Klasse: gap)
         yolo_labels.append(f"0 {x_center:.6f} {y_center:.6f} {width_norm:.6f} {height_norm:.6f}")
     
     return yolo_labels
@@ -362,7 +362,7 @@ val: images/val
 
 # Klassen
 nc: 1
-names: ['freie_stelle']
+names: ['gap']
 """
     
     with open(output_path / 'data.yaml', 'w', encoding='utf-8') as f:

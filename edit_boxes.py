@@ -1,9 +1,10 @@
 """
-Interaktives Skript zum Löschen von Bounding Boxes
-Geht alle Bilder im Dataset durch. Klicke auf Boxen um sie zu löschen.
+Interaktives Skript zum Bearbeiten von Bounding Boxes mit mehreren Klassen
+Unterstützt mehrere Klassen: gap, lines, free_spaces
 
 Steuerung:
   - Linksklick + Ziehen: Neue Box zeichnen
+  - 0/1/2: Wähle Klasse (0=gap, 1=lines, 2=free_spaces)
   - Rechtsklick: Box löschen (die Box unter dem Mauszeiger)
   - 'z': Letzte Aktion rückgängig machen (Undo)
   - 's': Änderungen speichern
@@ -22,6 +23,11 @@ import sys
 
 
 class BoxEditor:
+    # Klassen-Definition
+    CLASS_NAMES = {0: 'gap', 1: 'lines', 2: 'free_spaces'}
+    CLASS_COLORS = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 165, 255)}  # BGR
+    NUM_CLASSES = 3
+    
     def __init__(self, image_path, label_path, yolo_model=None, yolo_conf=0.25, image_index=0, total_images=1):
         """
         Args:
@@ -46,17 +52,18 @@ class BoxEditor:
         
         self.img_h, self.img_w = self.original_image.shape[:2]
         
-        # Boxen laden
-        self.boxes = []  # Liste von (x1, y1, x2, y2) in Pixeln
-        self.deleted_boxes = []  # Undo-Stack
-        self.undo_stack = []  # Allgemeiner Undo-Stack: ('add', box) oder ('delete', box)
-        self.hover_idx = -1  # Index der Box unter dem Mauszeiger
+        # Boxen laden: Liste von (x1, y1, x2, y2, class_id)
+        self.boxes = []
+        self.deleted_boxes = []
+        self.undo_stack = []
+        self.hover_idx = -1
         self.unsaved_changes = False
+        self.current_class = 0  # Aktuelle Klasse zum Zeichnen
         
-        # Zeichen-Modus (Rechtsklick + Ziehen)
+        # Zeichen-Modus
         self.drawing = False
-        self.draw_start = None  # (x, y)
-        self.draw_current = None  # (x, y)
+        self.draw_start = None
+        self.draw_current = None
         
         self._load_boxes()
     
@@ -70,7 +77,7 @@ class BoxEditor:
             print(f"⚠️  Keine Labels für: {self.image_path.name}")
     
     def _load_from_labels(self):
-        """Boxen aus YOLO Label-Datei laden"""
+        """Boxen aus YOLO Label-Datei laden (mit Klasse-IDs)"""
         print(f"📄 Lade Labels aus: {self.label_path}")
         
         with open(self.label_path, 'r') as f:
@@ -80,6 +87,7 @@ class BoxEditor:
             parts = line.strip().split()
             if len(parts) >= 5:
                 # YOLO Format: class x_center y_center width height (normalisiert)
+                class_id = int(parts[0])
                 x_center = float(parts[1]) * self.img_w
                 y_center = float(parts[2]) * self.img_h
                 width = float(parts[3]) * self.img_w
@@ -90,7 +98,8 @@ class BoxEditor:
                 x2 = int(x_center + width / 2)
                 y2 = int(y_center + height / 2)
                 
-                self.boxes.append((x1, y1, x2, y2))
+                # Klasse-ID speichern
+                self.boxes.append((x1, y1, x2, y2, class_id))
         
         print(f"✅ {len(self.boxes)} Boxen geladen")
     
@@ -128,7 +137,8 @@ class BoxEditor:
                 for idx in keep:
                     box = r.boxes[idx]
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                    self.boxes.append((int(x1), int(y1), int(x2), int(y2)))
+                    # YOLO erkannte Boxen als Klasse 0 (gap) speichern
+                    self.boxes.append((int(x1), int(y1), int(x2), int(y2), 0))
         
         # Sortieren in Lesereihenfolge
         self.boxes.sort(key=lambda b: (b[1], b[0]))
@@ -136,7 +146,7 @@ class BoxEditor:
     
     def _point_in_box(self, px, py, box):
         """Prüfe ob ein Punkt in einer Box liegt"""
-        x1, y1, x2, y2 = box
+        x1, y1, x2, y2 = box[:4]
         return x1 <= px <= x2 and y1 <= py <= y2
     
     def _find_box_at(self, px, py):
@@ -144,7 +154,8 @@ class BoxEditor:
         candidates = []
         for i, box in enumerate(self.boxes):
             if self._point_in_box(px, py, box):
-                area = (box[2] - box[0]) * (box[3] - box[1])
+                x1, y1, x2, y2 = box[:4]
+                area = (x2 - x1) * (y2 - y1)
                 candidates.append((area, i))
         
         if candidates:
@@ -157,49 +168,55 @@ class BoxEditor:
         """Bild mit Boxen zeichnen"""
         display = self.original_image.copy()
         
-        for i, (x1, y1, x2, y2) in enumerate(self.boxes):
+        for i, box in enumerate(self.boxes):
+            x1, y1, x2, y2 = box[:4]
+            class_id = box[4] if len(box) > 4 else 0
+            color = self.CLASS_COLORS.get(class_id, (255, 255, 255))
+            
             if i == self.hover_idx and not self.drawing:
                 # Hervorgehobene Box (Maus darüber)
-                color = (0, 0, 255)  # Rot
                 thickness = 3
                 # Halbtransparentes Overlay
                 overlay = display.copy()
-                cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), -1)
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
                 display = cv2.addWeighted(overlay, 0.3, display, 0.7, 0)
             else:
-                color = (0, 255, 0)  # Grün
                 thickness = 2
             
             cv2.rectangle(display, (x1, y1), (x2, y2), color, thickness)
             
-            # Nummer
-            label = str(i + 1)
-            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            # Label mit Klasse und Nummer
+            class_name = self.CLASS_NAMES.get(class_id, 'unknown')
+            label = f"{i+1}:{class_name}"
+            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
             cv2.rectangle(display, (x1, y1 - label_size[1] - 6), 
                          (x1 + label_size[0] + 4, y1), color, -1)
             cv2.putText(display, label, (x1 + 2, y1 - 4), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         
-        # Zeichne aktuelle Zeichnung (Rechtsklick-Drag)
+        # Zeichne aktuelle Zeichnung (Linksklick-Drag)
         if self.drawing and self.draw_start and self.draw_current:
             sx, sy = self.draw_start
             cx, cy = self.draw_current
             x1_d, y1_d = min(sx, cx), min(sy, cy)
             x2_d, y2_d = max(sx, cx), max(sy, cy)
-            cv2.rectangle(display, (x1_d, y1_d), (x2_d, y2_d), (255, 165, 0), 2)  # Orange
-            # Größe anzeigen
+            color = self.CLASS_COLORS.get(self.current_class, (255, 255, 255))
+            cv2.rectangle(display, (x1_d, y1_d), (x2_d, y2_d), color, 2)
+            # Größe und Klasse anzeigen
             w_d, h_d = x2_d - x1_d, y2_d - y1_d
-            size_text = f"{w_d}x{h_d}"
+            class_name = self.CLASS_NAMES.get(self.current_class, 'unknown')
+            size_text = f"{w_d}x{h_d} ({class_name})"
             cv2.putText(display, size_text, (x1_d, y1_d - 8),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 165, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         
         # Status-Leiste unten
-        status_h = 40
+        status_h = 50
         status_bar = np.zeros((status_h, display.shape[1], 3), dtype=np.uint8)
         status_bar[:] = (40, 40, 40)
         
         progress = f"[{self.image_index + 1}/{self.total_images}] {self.image_path.name}"
-        info = f"{progress} | Boxen: {len(self.boxes)}"
+        current_class_name = self.CLASS_NAMES.get(self.current_class, 'unknown')
+        info = f"{progress} | Boxen: {len(self.boxes)} | Klasse: {current_class_name} (0/1/2)"
         if self.unsaved_changes:
             info += " | *"
         if self.drawing:
@@ -208,10 +225,10 @@ class BoxEditor:
             info += f" | Box {self.hover_idx + 1}"
         
         cv2.putText(status_bar, info, (10, 28), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         
-        controls = "L-Drag=Neu | R=Box weg | Z=Undo | S=Save | N/Space=Weiter | P=Back | D=Bild weg | Q=Ende"
-        cv2.putText(status_bar, controls, (display.shape[1] - 780, 28),
+        controls = "L-Drag=Neu | R=weg | Z=Undo | S=Save | N/Space=Weiter | 0/1/2=Klasse | Q=Ende"
+        cv2.putText(status_bar, controls, (display.shape[1] - 650, 28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1)
         
         display = np.vstack([display, status_bar])
@@ -239,16 +256,16 @@ class BoxEditor:
                 y1 = min(sy, y)
                 x2 = max(sx, x)
                 y2 = max(sy, y)
-                y2 = max(sy, y)
                 
                 # Mindestgröße prüfen (mind. 5x5 Pixel)
                 if (x2 - x1) >= 5 and (y2 - y1) >= 5:
-                    new_box = (x1, y1, x2, y2)
+                    new_box = (x1, y1, x2, y2, self.current_class)
                     self.boxes.append(new_box)
                     self.boxes.sort(key=lambda b: (b[1], b[0]))
                     self.undo_stack.append(('add', new_box))
                     self.unsaved_changes = True
-                    print(f"➕ Neue Box: ({x1}, {y1}) -> ({x2}, {y2})")
+                    class_name = self.CLASS_NAMES.get(self.current_class, 'unknown')
+                    print(f"➕ Neue Box ({class_name}): ({x1}, {y1}) -> ({x2}, {y2})")
                 else:
                     print("⚠️  Box zu klein, verworfen")
                 
@@ -263,27 +280,28 @@ class BoxEditor:
                 self.undo_stack.append(('delete', deleted_box))
                 self.unsaved_changes = True
                 self.hover_idx = -1
-                print(f"🗑️  Box {idx + 1} gelöscht: {deleted_box}")
+                print(f"🗑️  Box {idx + 1} gelöscht")
     
     def save_labels(self):
-        """Aktuelle Boxen als YOLO Labels speichern"""
+        """Aktuelle Boxen als YOLO Labels speichern (mit Klassen-IDs)"""
         yolo_lines = []
-        for x1, y1, x2, y2 in self.boxes:
+        for x1, y1, x2, y2, class_id in self.boxes:
             x_center = ((x1 + x2) / 2) / self.img_w
             y_center = ((y1 + y2) / 2) / self.img_h
             width = (x2 - x1) / self.img_w
             height = (y2 - y1) / self.img_h
-            yolo_lines.append(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
+            yolo_lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
         
         with open(self.label_path, 'w') as f:
             f.write('\n'.join(yolo_lines))
         
-        # Visualisierung updaten
+        # Visualisierung updaten (mit Farben nach Klasse)
         viz_dir = self.image_path.parent.parent.parent / 'visualize' / self.image_path.parent.name
         if viz_dir.exists():
             viz_img = self.original_image.copy()
-            for x1, y1, x2, y2 in self.boxes:
-                cv2.rectangle(viz_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            for x1, y1, x2, y2, class_id in self.boxes:
+                color = self.CLASS_COLORS.get(class_id, (255, 255, 255))
+                cv2.rectangle(viz_img, (x1, y1), (x2, y2), color, 2)
             viz_path = viz_dir / f"{self.image_path.stem}_marked{self.image_path.suffix}"
             cv2.imwrite(str(viz_path), viz_img)
         
@@ -397,6 +415,18 @@ class BoxEditor:
                 self.boxes.sort(key=lambda b: (b[1], b[0]))
                 self.unsaved_changes = True
                 print("🔄 Alle Boxen wiederhergestellt")
+            
+            elif key == ord('0'):  # Klasse 0: gap
+                self.current_class = 0
+                print(f"📍 Klasse gewechselt zu: {self.CLASS_NAMES[0]}")
+            
+            elif key == ord('1'):  # Klasse 1: lines
+                self.current_class = 1
+                print(f"📍 Klasse gewechselt zu: {self.CLASS_NAMES[1]}")
+            
+            elif key == ord('2'):  # Klasse 2: free_spaces
+                self.current_class = 2
+                print(f"📍 Klasse gewechselt zu: {self.CLASS_NAMES[2]}")
         
         return result
 

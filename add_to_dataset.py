@@ -18,7 +18,7 @@ from edit_boxes import BoxEditor
 
 # ── Konfiguration ──────────────────────────────────────────
 DATASET_DIR = "dataset"
-YOLO_MODEL = "gap_detection_model.pt"
+YOLO_MODEL = "./model/gap_detection_model.pt"
 YOLO_CONF = 0.25
 TRAIN_SPLIT = 0.8  # 80% train, 20% val
 VISUALIZE = True
@@ -138,12 +138,82 @@ def save_to_dataset(image_path, label_path, boxes, dataset_dir, split, visualize
         viz_dir.mkdir(parents=True, exist_ok=True)
         
         img = cv2.imread(str(img_path))
-        for x1, y1, x2, y2 in boxes:
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        # Lese die Labels um die Klassen-Farben zu verwenden
+        class_colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 165, 255)}  # BGR
+        
+        with open(str(target_label), 'r') as f:
+            label_lines = f.readlines()
+        
+        img_h, img_w = img.shape[:2]
+        for line in label_lines:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                class_id = int(parts[0])
+                x_center = float(parts[1]) * img_w
+                y_center = float(parts[2]) * img_h
+                width = float(parts[3]) * img_w
+                height = float(parts[4]) * img_h
+                
+                x1 = int(x_center - width / 2)
+                y1 = int(y_center - height / 2)
+                x2 = int(x_center + width / 2)
+                y2 = int(y_center + height / 2)
+                
+                color = class_colors.get(class_id, (255, 255, 255))
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
         viz_path = viz_dir / f"{safe_name}_marked{safe_ext}"
         cv2.imwrite(str(viz_path), img)
     
     return target_image, target_label
+
+
+def resolve_input_paths(inputs):
+    """
+    Löst Eingaben automatisch als Datei oder Ordner auf.
+    - Datei: wird direkt übernommen
+    - Ordner: alle Bilddateien im Ordner werden übernommen (nicht rekursiv)
+
+    Returns:
+        (resolved_images, seen_sources)
+        resolved_images: Liste von Bildpfaden
+        seen_sources: Anzahl verarbeiteter Quell-Eingaben (Datei/Ordner)
+    """
+    image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp', '.gif'}
+    resolved_images = []
+    seen_sources = 0
+
+    for raw in inputs:
+        cleaned = str(raw).lstrip('&').strip().strip('"').strip("'")
+        if not cleaned:
+            continue
+
+        path = Path(cleaned)
+        if not path.exists():
+            print(f"⚠️  Nicht gefunden: {cleaned}")
+            continue
+
+        seen_sources += 1
+
+        if path.is_dir():
+            folder_images = [
+                str(f) for f in sorted(path.iterdir())
+                if f.is_file() and f.suffix.lower() in image_extensions
+            ]
+            if not folder_images:
+                print(f"⚠️  Keine Bilder im Ordner gefunden: {path}")
+            else:
+                resolved_images.extend(folder_images)
+                print(f"📁 {path.name}: {len(folder_images)} Bild(er) gefunden")
+        elif path.is_file():
+            if path.suffix.lower() in image_extensions:
+                resolved_images.append(str(path))
+            else:
+                print(f"⚠️  Kein unterstütztes Bildformat: {path}")
+
+    # Duplikate entfernen, Reihenfolge behalten
+    resolved_images = list(dict.fromkeys(resolved_images))
+    return resolved_images, seen_sources
 
 
 def add_images(image_paths):
@@ -169,9 +239,17 @@ def add_images(image_paths):
     counts = count_dataset_images(DATASET_DIR)
     print(f"📊 Aktuelles Dataset: {counts['train']} train / {counts['val']} val")
     
+    # Pfade bereinigen und validieren
+    cleaned_paths = []
+    for p in image_paths:
+        # PowerShell-Symbols entfernen
+        cleaned = str(p).lstrip('&').strip().strip('"').strip("'")
+        if cleaned:
+            cleaned_paths.append(cleaned)
+    
     # Bilder filtern
     valid_images = []
-    for p in image_paths:
+    for p in cleaned_paths:
         path = Path(p)
         if not path.exists():
             print(f"⚠️  Nicht gefunden: {p}")
@@ -315,24 +393,37 @@ def main():
     import sys
     
     if len(sys.argv) > 1:
-        # Bilder als Argumente
-        image_paths = sys.argv[1:]
-    else:
-        # Interaktiv nach Bildern fragen
-        print("📷 Bilder zum Dataset hinzufügen")
-        print("   Gib Bildpfade ein (einer pro Zeile, leere Zeile = fertig):")
-        print("   Oder ziehe Dateien hierher.\n")
-        
-        image_paths = []
-        while True:
-            path = input("  > ").strip().strip('"').strip("'")
-            if not path:
-                break
-            image_paths.append(path)
-        
-        if not image_paths:
-            print("❌ Keine Bilder angegeben!")
+        # Dateien oder Ordner als Argumente
+        image_paths, source_count = resolve_input_paths(sys.argv[1:])
+        if source_count == 0:
+            print("❌ Keine gültigen Eingaben gefunden!")
             return
+    else:
+        print("📷 Bilder zum Dataset hinzufügen")
+        print("   Gib Datei- oder Ordnerpfade ein (einer pro Zeile, leer = fertig).")
+        print("   Ordner werden automatisch erkannt und deren Bilder geladen.\n")
+
+        raw_inputs = []
+        while True:
+            raw_input = input("  > ").strip()
+            if not raw_input:
+                break
+            raw_inputs.append(raw_input)
+
+        if not raw_inputs:
+            print("❌ Keine Eingaben angegeben!")
+            return
+
+        image_paths, source_count = resolve_input_paths(raw_inputs)
+        if source_count == 0:
+            print("❌ Keine gültigen Eingaben gefunden!")
+            return
+
+        print(f"\n✓ {len(image_paths)} Bild(er) insgesamt übernommen\n")
+
+    if not image_paths:
+        print("❌ Keine neuen Bilder zum Hinzufügen!")
+        return
     
     add_images(image_paths)
 
