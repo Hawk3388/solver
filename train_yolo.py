@@ -10,7 +10,7 @@ import yaml
 def train(
     data_yaml='dataset/data.yaml',
     model_size='l',  # n, s, m, l, x (l = large, recommended)
-    epochs=300,
+    epochs=1500,
     img_size=640,
     batch_size=16,
     project_name='arbeitsblatt_yolo',
@@ -82,18 +82,18 @@ def train(
             # Projekt-Einstellungen
             project=project_name,
             name=run_name,
-            exist_ok=False,  # Erstelle neuen Ordner wenn Name existiert
+            exist_ok=False,   # Erstelle neuen Ordner wenn Name existiert
             
             # Early Stopping & Checkpointing
-            patience=0,      # Stoppe wenn keine Verbesserung nach N Epochen
+            patience=0,       # Stoppe wenn keine Verbesserung nach N Epochen
             save=True,        # Speichere Checkpoints
-            save_period=100,   # Speichere alle N Epochen
+            save_period=250,  # Speichere alle N Epochen
             
             # Validation
             val=True,
             
             # Performance
-            workers=4,        # 0 für Windows (kein multiprocessing), sonst 4-8
+            workers=4,        # Anzahl CPU-Worker für Daten-Loading
             pretrained=True,  # Transfer Learning von vortrainiertem Modell
             
             # Logging
