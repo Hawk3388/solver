@@ -4,7 +4,8 @@ Unterstützt mehrere Klassen: gap, lines, free_spaces
 
 Steuerung:
   - Linksklick + Ziehen: Neue Box zeichnen
-  - 0/1/2: Wähle Klasse (0=gap, 1=lines, 2=free_spaces)
+    - 0/1/2: Wähle Klasse zum Zeichnen
+    - Maus über Box + 0/1/2: Klasse dieser Box ändern
   - Rechtsklick: Box löschen (die Box unter dem Mauszeiger)
   - 'z': Letzte Aktion rückgängig machen (Undo)
   - 's': Änderungen speichern
@@ -167,6 +168,7 @@ class BoxEditor:
     def _draw(self):
         """Bild mit Boxen zeichnen"""
         display = self.original_image.copy()
+        class_keys = '/'.join(str(k) for k in sorted(self.CLASS_NAMES.keys()))
         
         for i, box in enumerate(self.boxes):
             x1, y1, x2, y2 = box[:4]
@@ -216,18 +218,20 @@ class BoxEditor:
         
         progress = f"[{self.image_index + 1}/{self.total_images}] {self.image_path.name}"
         current_class_name = self.CLASS_NAMES.get(self.current_class, 'unknown')
-        info = f"{progress} | Boxen: {len(self.boxes)} | Klasse: {current_class_name} (0/1/2)"
+        info = f"{progress} | Boxen: {len(self.boxes)} | Klasse: {current_class_name} ({class_keys})"
         if self.unsaved_changes:
             info += " | *"
         if self.drawing:
             info += " | ZEICHNEN..."
         elif self.hover_idx >= 0:
-            info += f" | Box {self.hover_idx + 1}"
+            hover_class = self.boxes[self.hover_idx][4]
+            hover_name = self.CLASS_NAMES.get(hover_class, 'unknown')
+            info += f" | Box {self.hover_idx + 1}: {hover_name}"
         
         cv2.putText(status_bar, info, (10, 28), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         
-        controls = "L-Drag=Neu | R=weg | Z=Undo | S=Save | N/Space=Weiter | 0/1/2=Klasse | Q=Ende"
+        controls = "L-Drag=Neu | R=weg | Z=Undo | S=Save | N/Space=Weiter | Zahl=Klasse (Hover=Box) | Q=Ende"
         cv2.putText(status_bar, controls, (display.shape[1] - 650, 28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1)
         
@@ -281,6 +285,24 @@ class BoxEditor:
                 self.unsaved_changes = True
                 self.hover_idx = -1
                 print(f"🗑️  Box {idx + 1} gelöscht")
+
+    def _set_hovered_box_class(self, class_id):
+        """Ändert die Klasse der aktuell gehoverten Box."""
+        if self.hover_idx < 0 or self.hover_idx >= len(self.boxes):
+            return False
+
+        x1, y1, x2, y2, old_class = self.boxes[self.hover_idx]
+        if old_class == class_id:
+            return False
+
+        self.boxes[self.hover_idx] = (x1, y1, x2, y2, class_id)
+        self.undo_stack.append(('class_change', self.hover_idx, old_class, class_id))
+        self.unsaved_changes = True
+
+        old_name = self.CLASS_NAMES.get(old_class, str(old_class))
+        new_name = self.CLASS_NAMES.get(class_id, str(class_id))
+        print(f"🏷️  Box {self.hover_idx + 1}: {old_name} -> {new_name}")
+        return True
     
     def save_labels(self):
         """Aktuelle Boxen als YOLO Labels speichern (mit Klassen-IDs)"""
@@ -392,19 +414,30 @@ class BoxEditor:
             
             elif key == ord('z'):  # Undo
                 if self.undo_stack:
-                    action_type, box = self.undo_stack.pop()
+                    action = self.undo_stack.pop()
+                    action_type = action[0]
                     if action_type == 'delete':
+                        box = action[1]
                         # Gelöschte Box wiederherstellen
                         self.boxes.append(box)
                         self.boxes.sort(key=lambda b: (b[1], b[0]))
                         self.unsaved_changes = True
                         print(f"↩️  Box wiederhergestellt: {box}")
                     elif action_type == 'add':
+                        box = action[1]
                         # Hinzugefügte Box wieder entfernen
                         if box in self.boxes:
                             self.boxes.remove(box)
                             self.unsaved_changes = True
                             print(f"↩️  Hinzufügen rückgängig: {box}")
+                    elif action_type == 'class_change':
+                        idx, old_class, _new_class = action[1], action[2], action[3]
+                        if 0 <= idx < len(self.boxes):
+                            x1, y1, x2, y2, _ = self.boxes[idx]
+                            self.boxes[idx] = (x1, y1, x2, y2, old_class)
+                            self.unsaved_changes = True
+                            class_name = self.CLASS_NAMES.get(old_class, str(old_class))
+                            print(f"↩️  Klassenänderung rückgängig: Box {idx + 1} -> {class_name}")
             
             elif key == ord('s'):  # Speichern
                 self.save_labels()
@@ -416,17 +449,14 @@ class BoxEditor:
                 self.unsaved_changes = True
                 print("🔄 Alle Boxen wiederhergestellt")
             
-            elif key == ord('0'):  # Klasse 0: gap
-                self.current_class = 0
-                print(f"📍 Klasse gewechselt zu: {self.CLASS_NAMES[0]}")
-            
-            elif key == ord('1'):  # Klasse 1: lines
-                self.current_class = 1
-                print(f"📍 Klasse gewechselt zu: {self.CLASS_NAMES[1]}")
-            
-            elif key == ord('2'):  # Klasse 2: free_spaces
-                self.current_class = 2
-                print(f"📍 Klasse gewechselt zu: {self.CLASS_NAMES[2]}")
+            elif ord('0') <= key <= ord('9'):
+                selected_class = key - ord('0')
+                if selected_class in self.CLASS_NAMES:
+                    # Wenn Maus über Box: Klasse der Box ändern, sonst aktive Zeichenklasse setzen
+                    changed = self._set_hovered_box_class(selected_class)
+                    if not changed:
+                        self.current_class = selected_class
+                        print(f"📍 Zeichenklasse gewechselt zu: {self.CLASS_NAMES[selected_class]}")
         
         return result
 
@@ -474,6 +504,7 @@ def main():
     print(f"📁 {len(pairs)} Bilder im Dataset gefunden")
     print(f"\n🎮 Steuerung:")
     print(f"   L-Ziehen    = Neue Box zeichnen")
+    print(f"   Zahl        = Klasse wählen (über Box = Box-Klasse ändern)")
     print(f"   Rechtsklick = Box löschen")
     print(f"   Z           = Undo")
     print(f"   S           = Speichern")
