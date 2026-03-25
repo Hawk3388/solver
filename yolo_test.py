@@ -67,6 +67,74 @@ def filter_overlapping_boxes(boxes, iou_threshold=0.5):
     return sorted(keep)  # Zurück in ursprünglicher Reihenfolge
 
 
+def is_line_class(class_name):
+    """True only for the exact YOLO class name 'line'."""
+    return str(class_name).strip().lower() == "line"
+
+
+def unit_bbox(unit, gaps):
+    """Return merged bbox (x1, y1, x2, y2) for an answer unit."""
+    boxes = [gaps[i][:4] for i in unit if 0 <= i < len(gaps)]
+    if not boxes:
+        return (0, 0, 0, 0)
+    return (
+        min(b[0] for b in boxes),
+        min(b[1] for b in boxes),
+        max(b[2] for b in boxes),
+        max(b[3] for b in boxes),
+    )
+
+
+def sort_units_reading_order(units, gaps):
+    """Sort units globally by reading order: top->bottom, left->right."""
+    if not units:
+        return []
+
+    unit_data = []
+    for idx, unit in enumerate(units):
+        x1, y1, x2, y2 = unit_bbox(unit, gaps)
+        unit_data.append({
+            "idx": idx,
+            "unit": unit,
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "h": max(1, y2 - y1),
+        })
+
+    unit_data.sort(key=lambda u: u["y1"])
+
+    rows = []
+    current_row = [unit_data[0]]
+    row_y_min = unit_data[0]["y1"]
+    row_y_max = unit_data[0]["y2"]
+
+    for u in unit_data[1:]:
+        overlap = min(row_y_max, u["y2"]) - max(row_y_min, u["y1"])
+        row_h = max(1, row_y_max - row_y_min)
+        min_h = max(1, min(row_h, u["h"]))
+
+        if overlap > 0 and (overlap / min_h) > 0.3:
+            current_row.append(u)
+            row_y_min = min(row_y_min, u["y1"])
+            row_y_max = max(row_y_max, u["y2"])
+        else:
+            rows.append(current_row)
+            current_row = [u]
+            row_y_min = u["y1"]
+            row_y_max = u["y2"]
+
+    rows.append(current_row)
+
+    sorted_units = []
+    for row in rows:
+        row.sort(key=lambda u: u["x1"])
+        sorted_units.extend([u["unit"] for u in row])
+
+    return sorted_units
+
+
 def group_gaps_by_proximity(gaps):
     """
     Gruppiert Boxen, die direkt untereinander liegen.
@@ -101,10 +169,17 @@ def group_gaps_by_proximity(gaps):
         if i in grouped:
             continue
         
-        # Starte neue Gruppe mit aktuellem Gap
+        gap_i = gaps[i]
+        x1_i, y1_i, x2_i, y2_i = gap_i[:4]
+        class_name_i = gap_i[4] if len(gap_i) > 4 else "line"
+        
+        # Nur echte line-Boxen werden gruppiert. Andere Klassen werden ignoriert.
+        if not is_line_class(class_name_i):
+            continue
+
+        # Starte neue Gruppe mit aktuellem line-Gap
         current_group = [i]
         grouped.add(i)
-        gap_i = gaps[i]
         
         # Suche nach Gaps unterhalb dieses Gaps
         for sort_j in range(sort_i + 1, len(sorted_indices)):
@@ -114,13 +189,19 @@ def group_gaps_by_proximity(gaps):
                 continue
             
             gap_j = gaps[j]
+            x1_j, y1_j, x2_j, y2_j = gap_j[:4]
+            class_name_j = gap_j[4] if len(gap_j) > 4 else "line"
+            
+            # Only group if both are exact line class detections
+            if not is_line_class(class_name_j):
+                continue
             
             # Prüfe vertikalen Abstand (Gap j sollte unter Gap i sein)
-            vertical_distance = gap_j[1] - gap_i[3]
+            vertical_distance = y1_j - y2_i
             
             # Prüfe horizontale Ausrichtung
-            i_left, i_top, i_right, i_bottom = gap_i
-            j_left, j_top, j_right, j_bottom = gap_j
+            i_left, i_top, i_right, i_bottom = x1_i, y1_i, x2_i, y2_i
+            j_left, j_top, j_right, j_bottom = x1_j, y1_j, x2_j, y2_j
             
             # Berechne horizontale Überlappung
             h_overlap_start = max(i_left, j_left)
@@ -139,6 +220,7 @@ def group_gaps_by_proximity(gaps):
                     current_group.append(j)
                     grouped.add(j)
                     gap_i = gap_j  # Update für nächste Iteration
+                    x1_i, y1_i, x2_i, y2_i = gap_i[:4]
                 else:
                     # Wenn nicht genug Überlappung, beende diese Gruppe
                     break
@@ -199,49 +281,71 @@ for r in results:
         
         for idx in keep_indices:
             box = r.boxes[idx]
+            class_id = int(box.cls[0])
+            class_name = r.names[class_id]
             x1, y1, x2, y2 = box.xyxy[0].tolist()
-            gaps.append((int(x1), int(y1), int(x2), int(y2)))
+            gaps.append((int(x1), int(y1), int(x2), int(y2), class_name))
             gap_info.append({
                 'box': box,
-                'class_id': int(box.cls[0]),
+                'class_id': class_id,
                 'confidence': float(box.conf[0])
             })
         
-        # Gruppiere Gaps nach Nähe
+        # Gruppiere line-Boxen und baue globale Antwort-Einheiten
         groups, gap_to_group = group_gaps_by_proximity(gaps)
-        
+        grouped_indices = set(gap_to_group.keys())
+        ungrouped_indices = [i for i in range(len(gaps)) if i not in grouped_indices]
+
+        unsorted_units = list(groups) + [[idx] for idx in ungrouped_indices]
+        answer_units = sort_units_reading_order(unsorted_units, gaps)
+        gap_to_unit = {}
+        for unit_idx, unit in enumerate(answer_units):
+            for gap_idx in unit:
+                gap_to_unit[gap_idx] = unit_idx
+
         print(f"\n✅ Gefundene freie Stellen (nach Filterung): {len(gaps)} Stellen")
-        print(f"📊 Gruppiert in {len(groups)} Gruppen\n")
+        print(f"📊 Line-Boxen gruppiert in {len(groups)} Gruppen")
+        print(f"📌 Nicht gruppierte Boxen (z.B. gap): {len(ungrouped_indices)}\n")
+        print(f"🔢 Antwort-Einheiten (global nummeriert): {len(answer_units)}\n")
         
-        # Zeige gruppierte freie Stellen
-        for group_idx, group in enumerate(groups):
-            print(f"📍 Gruppe {group_idx + 1}: {len(group)} Stelle(n)")
-            
-            for pos_in_group, gap_idx in enumerate(group):
+        # Zeige nur line-Gruppen
+        for unit_idx, unit in enumerate(answer_units):
+            print(f"📍 Einheit {unit_idx + 1}: {len(unit)} Stelle(n)")
+
+            for pos_in_group, gap_idx in enumerate(unit):
                 box = gap_info[gap_idx]
-                x1, y1, x2, y2 = gaps[gap_idx]
+                gap = gaps[gap_idx]
+                x1, y1, x2, y2 = gap[:4]
                 
                 print(f"   Stelle {pos_in_group + 1}:")
                 print(f"     Klasse: {r.names[box['class_id']]}")
                 print(f"     Konfidenz: {box['confidence']:.2%}")
                 print(f"     Box: ({x1}, {y1}) → ({x2}, {y2})")
                 print(f"     Größe: {x2-x1} x {y2-y1} px")
+
+        # Zeige ungruppierte (gap etc.) separat
+        if ungrouped_indices:
+            print("\n🧩 Ungruppierte Boxen:")
+            for idx in ungrouped_indices:
+                box = gap_info[idx]
+                x1, y1, x2, y2 = gaps[idx][:4]
+                unit_num = gap_to_unit.get(idx, -1) + 1
+                print(f"   - Nr {unit_num} | Klasse: {r.names[box['class_id']]} | Konfidenz: {box['confidence']:.2%} | Box: ({x1}, {y1}) → ({x2}, {y2})")
     
     # Bild mit markierten freien Stellen anzeigen (nur gefilterte)
     print(f"\n🎨 Zeige Ergebnis...")
     
     if len(keep_indices) > 0:
-        # Manuell zeichnen mit nur den gefilterten Boxen
+        # Zeichne eine Sammelbox pro Antwort-Einheit
         img = r.orig_img.copy()
-        for gap_idx, gap in enumerate(gaps):
-            x1, y1, x2, y2 = gap
-            group_num = gap_to_group[gap_idx] + 1  # 1-based numbering
-            
+        for unit_idx, unit in enumerate(answer_units):
+            x1, y1, x2, y2 = unit_bbox(unit, gaps)
+
             # Box zeichnen
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            
-            # Gruppennummer als Label
-            label = f"G{group_num}"
+
+            # Reine Zahlenlabel
+            label = str(unit_idx + 1)
             label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
             cv2.rectangle(img, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), (255, 0, 0), -1)
             cv2.putText(img, label, (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)

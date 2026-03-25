@@ -145,6 +145,9 @@ class WorksheetSolver():
         self.detected_gaps = []
         self.gap_groups = []  # Groups of gap indices
         self.gap_to_group = {}  # Maps gap index to group index
+        self.ungrouped_gap_indices = []
+        self.answer_units = []  # Line groups + single ungrouped boxes
+        self.gap_to_answer_unit = {}  # Maps any gap index to answer unit index
         
     def load_image(self, image_path: str):
         """Load image and create a copy for processing"""
@@ -233,11 +236,11 @@ class WorksheetSolver():
         current_line = [boxes_sorted[0]]
         # y-center and height of the current line
         line_y_min = boxes_sorted[0][1]
-        line_y_max = boxes_sorted[0][3] if len(boxes_sorted[0]) == 4 else boxes_sorted[0][1] + boxes_sorted[0][3]
+        line_y_max = boxes_sorted[0][3]
         
         for box in boxes_sorted[1:]:
             box_y_top = box[1]
-            box_y_bottom = box[3] if len(box) == 4 else box[1] + box[3]
+            box_y_bottom = box[3]
             box_height = box_y_bottom - box_y_top
             line_height = line_y_max - line_y_min
             
@@ -267,6 +270,71 @@ class WorksheetSolver():
             result.extend(line)
         
         return result
+
+    def is_line_class(self, class_name):
+        """True only for the exact YOLO class name 'line'."""
+        return str(class_name).strip().lower() == "line"
+
+    def _unit_bbox(self, unit, gaps):
+        """Return merged bbox (x1, y1, x2, y2) for an answer unit."""
+        boxes = [gaps[i][:4] for i in unit if 0 <= i < len(gaps)]
+        if not boxes:
+            return (0, 0, 0, 0)
+        return (
+            min(b[0] for b in boxes),
+            min(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            max(b[3] for b in boxes),
+        )
+
+    def sort_answer_units_reading_order(self, units, gaps):
+        """Sort answer units globally by reading order: top->bottom, left->right."""
+        if not units:
+            return []
+
+        unit_data = []
+        for idx, unit in enumerate(units):
+            x1, y1, x2, y2 = self._unit_bbox(unit, gaps)
+            unit_data.append({
+                "idx": idx,
+                "unit": unit,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "h": max(1, y2 - y1),
+            })
+
+        unit_data.sort(key=lambda u: u["y1"])
+
+        rows = []
+        current_row = [unit_data[0]]
+        row_y_min = unit_data[0]["y1"]
+        row_y_max = unit_data[0]["y2"]
+
+        for u in unit_data[1:]:
+            overlap = min(row_y_max, u["y2"]) - max(row_y_min, u["y1"])
+            row_h = max(1, row_y_max - row_y_min)
+            min_h = max(1, min(row_h, u["h"]))
+
+            if overlap > 0 and (overlap / min_h) > 0.3:
+                current_row.append(u)
+                row_y_min = min(row_y_min, u["y1"])
+                row_y_max = max(row_y_max, u["y2"])
+            else:
+                rows.append(current_row)
+                current_row = [u]
+                row_y_min = u["y1"]
+                row_y_max = u["y2"]
+
+        rows.append(current_row)
+
+        sorted_units = []
+        for row in rows:
+            row.sort(key=lambda u: u["x1"])
+            sorted_units.extend([u["unit"] for u in row])
+
+        return sorted_units
     
     def group_gaps_by_proximity(self, gaps):
         """Group gaps that are directly below each other into groups.
@@ -298,10 +366,17 @@ class WorksheetSolver():
             if i in grouped:
                 continue
             
-            # Start new group with current gap
+            gap_i = gaps[i]
+            x1_i, y1_i, x2_i, y2_i = gap_i[:4]
+            class_name_i = gap_i[4] if len(gap_i) > 4 else "line"
+            
+            # Only exact 'line' class is groupable. Other classes are ignored here.
+            if not self.is_line_class(class_name_i):
+                continue
+
+            # Start new group with current line gap
             current_group = [i]
             grouped.add(i)
-            gap_i = gaps[i]
             
             # Look for gaps below this one
             for sort_j in range(sort_i + 1, len(sorted_indices)):
@@ -311,13 +386,19 @@ class WorksheetSolver():
                     continue
                 
                 gap_j = gaps[j]
+                x1_j, y1_j, x2_j, y2_j = gap_j[:4]
+                class_name_j = gap_j[4] if len(gap_j) > 4 else "line"
+                
+                # Only group if both are exact line class detections
+                if not self.is_line_class(class_name_j):
+                    continue
                 
                 # Check vertical distance (gap j should be below gap i)
-                vertical_distance = gap_j[1] - gap_i[3]
+                vertical_distance = y1_j - y2_i
                 
                 # Check horizontal alignment
-                i_left, i_top, i_right, i_bottom = gap_i
-                j_left, j_top, j_right, j_bottom = gap_j
+                i_left, i_top, i_right, i_bottom = x1_i, y1_i, x2_i, y2_i
+                j_left, j_top, j_right, j_bottom = x1_j, y1_j, x2_j, y2_j
                 
                 # Calculate horizontal overlap
                 h_overlap_start = max(i_left, j_left)
@@ -336,6 +417,7 @@ class WorksheetSolver():
                         current_group.append(j)
                         grouped.add(j)
                         gap_i = gap_j  # Update for next iteration
+                        x1_i, y1_i, x2_i, y2_i = gap_i[:4]
                     else:
                         # Not enough overlap, end this group
                         break
@@ -354,6 +436,7 @@ class WorksheetSolver():
 
     def detect_gaps(self):
         self.detected_gaps = []
+        img = self.load_image(self.path)
 
         results = self.model.predict(source=self.path, conf=0.10)
 
@@ -372,8 +455,10 @@ class WorksheetSolver():
             else:
                 for idx in keep_indices:
                     box = r.boxes[idx]
+                    class_id = int(box.cls[0])
+                    class_name = r.names[class_id]
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                    self.detected_gaps.append((int(x1), int(y1), int(x2), int(y2)))
+                    self.detected_gaps.append((int(x1), int(y1), int(x2), int(y2), class_name))
                 img = r.orig_img.copy()
         
         # Sort in reading order (line by line)
@@ -381,30 +466,49 @@ class WorksheetSolver():
         
         # Group gaps by proximity (vertically aligned and close together)
         self.gap_groups, self.gap_to_group = self.group_gaps_by_proximity(self.detected_gaps)
+        self.ungrouped_gap_indices = [i for i in range(len(self.detected_gaps)) if i not in self.gap_to_group]
+
+        # Build answer units for the AI:
+        # - grouped line boxes stay grouped
+        # - each ungrouped box (e.g. class gap) becomes its own single unit
+        unsorted_units = list(self.gap_groups) + [[idx] for idx in self.ungrouped_gap_indices]
+        self.answer_units = self.sort_answer_units_reading_order(unsorted_units, self.detected_gaps)
+        self.gap_to_answer_unit = {}
+        for unit_idx, unit in enumerate(self.answer_units):
+            for gap_idx in unit:
+                self.gap_to_answer_unit[gap_idx] = unit_idx
         
-        print(f"📊 Gaps grouped into {len(self.gap_groups)} groups")
+        print(f"📊 Line-boxes grouped into {len(self.gap_groups)} groups")
         for i, group in enumerate(self.gap_groups):
             print(f"   Group {i+1}: {len(group)} gaps (indices: {group})")
+        print(f"📌 Ungrouped boxes (e.g. gap): {len(self.ungrouped_gap_indices)}")
+        print(f"🧠 Total AI answer units: {len(self.answer_units)}")
                     
         return self.detected_gaps, img
 
     def mark_gaps(self, image, gaps):
-        """Mark detected gaps in the image with group numbers"""
-        
-        for i, gap in enumerate(gaps):
-            x1, y1, x2, y2 = gap
-            
-            # Get the group number for this gap
-            group_num = self.gap_to_group.get(i, i) + 1  # +1 for 1-based numbering
-            
-            # Draw red box
+        """Draw one red box per answer unit (group) instead of per single line."""
+
+        if not self.answer_units:
+            return image
+
+        for unit_idx, unit in enumerate(self.answer_units):
+            unit_boxes = [gaps[i][:4] for i in unit if 0 <= i < len(gaps)]
+            if not unit_boxes:
+                continue
+
+            # Surround the whole group with one box.
+            x1 = min(b[0] for b in unit_boxes)
+            y1 = min(b[1] for b in unit_boxes)
+            x2 = max(b[2] for b in unit_boxes)
+            y2 = max(b[3] for b in unit_boxes)
+
             cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            # Number at top left of the box (group number)
-            label = f"G{group_num}"
+
+            label = str(unit_idx + 1)
             label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-            # Background for better readability
             cv2.rectangle(image, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), (0, 0, 255), -1)
-            cv2.putText(image, label, (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            cv2.putText(image, (label), (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         return image
     
     def ask_ai_about_all_gaps(self, marked_image):
@@ -416,20 +520,25 @@ class WorksheetSolver():
         marked_image_path = f"{Path(self.path).stem}_marked.png"
         cv2.imwrite(marked_image_path, marked_image)
 
-        # Build description of groups
+        # Build description of answer units
         group_descriptions = []
-        for i, group in enumerate(self.gap_groups):
+        for i, group in enumerate(self.answer_units):
             group_num = i + 1
-            group_descriptions.append(f"Group {group_num}: {len(group)} stacked line(s) (marked as G{group_num})")
+            first_idx = group[0]
+            class_name = str(self.detected_gaps[first_idx][4]) if len(self.detected_gaps[first_idx]) > 4 else "gap"
+            if len(group) > 1:
+                group_descriptions.append(f"Group {group_num}: {len(group)} stacked line boxes (marked as {group_num})")
+            else:
+                group_descriptions.append(f"Group {group_num}: 1 single {class_name} box (marked as {group_num})")
         
         group_text = "\n".join(group_descriptions)
 
-        prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.gap_groups)} gap groups, one without markings.
+        prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.answer_units)} answer groups, one without markings.
 
-Gap groups to fill (boxes with the same group number stacked vertically belong together):
+Answer groups to fill:
 {group_text}
 
-For each group marked with "Gn", provide ONE answer that should fill ALL lines in that group.
+For each group marked with its number label, provide ONE answer that should fill that group.
 The answer will be distributed across the stacked lines (first line(s) filled first, then overflow to next line).
 
 Rules:
@@ -547,8 +656,11 @@ Rules:
         if not self.detected_gaps:
             print("No gaps found!")
             return {}
+        if not self.answer_units:
+            print("No answer units found to solve.")
+            return {}
         
-        print(f"🤖 Analyzing all {len(self.gap_groups)} gap groups with AI...")
+        print(f"🤖 Analyzing all {len(self.answer_units)} answer units with AI...")
         
         # Ask AI about all gap groups at once
         print("📤 Sending image to AI...")
@@ -567,8 +679,8 @@ Rules:
                     answer = pair.value
                     group_index = group_id - 1  # 0-based
                     
-                    if 0 <= group_index < len(self.gap_groups):
-                        gap_indices = self.gap_groups[group_index]
+                    if 0 <= group_index < len(self.answer_units):
+                        gap_indices = self.answer_units[group_index]
                         solutions[group_index] = {
                             'gap_indices': gap_indices,
                             'solution': answer
@@ -643,7 +755,7 @@ Rules:
                     break
                 
                 # Get current box dimensions
-                x1, y1, x2, y2 = boxes[current_box_idx]
+                x1, y1, x2, y2 = boxes[current_box_idx][:4]
                 box_width = x2 - x1
                 box_height = y2 - y1
                 
@@ -666,7 +778,7 @@ Rules:
                     current_box_idx += 1
                     
                     if current_box_idx < len(boxes):
-                        x1, y1, x2, y2 = boxes[current_box_idx]
+                        x1, y1, x2, y2 = boxes[current_box_idx][:4]
                         x_offset = x1 + 2  # Small padding
                         
                         # Now place the word in the new box
@@ -699,14 +811,17 @@ def main():
     try:
         gaps, img = solver.detect_gaps()
         
-        print(f"✅ {len(gaps)} gaps found in {len(solver.gap_groups)} groups!")
+        print(f"✅ {len(gaps)} boxes found, {len(solver.gap_groups)} line groups, {len(solver.ungrouped_gap_indices)} ungrouped!")
         
         marked_image = solver.mark_gaps(img, gaps)
         
         print("\n📍 Detected gaps (x, y, width, height):")
         for i, gap in enumerate(gaps):
-            group_num = solver.gap_to_group[i] + 1
-            print(f"  Gap {i+1} (Group {group_num}): {gap}")
+            unit_num = solver.gap_to_answer_unit.get(i)
+            if unit_num is not None:
+                print(f"  Box {i+1} (Group {unit_num + 1}): {gap}")
+            else:
+                print(f"  Box {i+1} (ungrouped): {gap}")
         
         print("\n📊 Gap groups:")
         for g_idx, group in enumerate(solver.gap_groups):
