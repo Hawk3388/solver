@@ -66,9 +66,98 @@ def filter_overlapping_boxes(boxes, iou_threshold=0.5):
     
     return sorted(keep)  # Zurück in ursprünglicher Reihenfolge
 
+
+def group_gaps_by_proximity(gaps):
+    """
+    Gruppiert Boxen, die direkt untereinander liegen.
+    
+    Args:
+        gaps: Liste von Gap-Boxen als Tuples (x1, y1, x2, y2)
+    
+    Returns:
+        groups: Liste von Gruppen, wobei jede Gruppe eine Liste von Gap-Indizes (in Original-Reihenfolge) ist
+        gap_to_group: Mapping von Gap-Index zu Gruppen-Index
+    """
+    if not gaps:
+        return [], {}
+    
+    # Erstelle Index-Mapping: sorted_idx -> original_idx
+    indices = list(range(len(gaps)))
+    sorted_indices = sorted(indices, key=lambda i: gaps[i][1])  # Sortiere nach Y (oben nach unten)
+    
+    # Berechne durchschnittliche Gap-Höhe als Schwellenwert
+    heights = [(gap[3] - gap[1]) for gap in gaps]
+    avg_height = sum(heights) / len(heights) if heights else 0
+    
+    # Abstands-Schwelle: Gaps sind "untereinander", wenn Abstand < durchschnittliche Höhe * 1.5
+    distance_threshold = avg_height * 1.5
+    
+    groups = []
+    gap_to_group = {}
+    grouped = set()
+    
+    # Verarbeite Gaps von oben nach unten
+    for sort_i, i in enumerate(sorted_indices):
+        if i in grouped:
+            continue
+        
+        # Starte neue Gruppe mit aktuellem Gap
+        current_group = [i]
+        grouped.add(i)
+        gap_i = gaps[i]
+        
+        # Suche nach Gaps unterhalb dieses Gaps
+        for sort_j in range(sort_i + 1, len(sorted_indices)):
+            j = sorted_indices[sort_j]
+            
+            if j in grouped:
+                continue
+            
+            gap_j = gaps[j]
+            
+            # Prüfe vertikalen Abstand (Gap j sollte unter Gap i sein)
+            vertical_distance = gap_j[1] - gap_i[3]
+            
+            # Prüfe horizontale Ausrichtung
+            i_left, i_top, i_right, i_bottom = gap_i
+            j_left, j_top, j_right, j_bottom = gap_j
+            
+            # Berechne horizontale Überlappung
+            h_overlap_start = max(i_left, j_left)
+            h_overlap_end = min(i_right, j_right)
+            h_overlap = max(0, h_overlap_end - h_overlap_start)
+            
+            # Breiten der Boxen
+            i_width = i_right - i_left
+            j_width = j_right - j_left
+            min_width = min(i_width, j_width)
+            
+            # Prüfe ob Box j unter Box i liegt und horizontal ausgerichtet ist
+            if 0 < vertical_distance < distance_threshold:
+                # Mindestens 30% Überlappung oder visuell nebeneinander
+                if h_overlap > min_width * 0.3 or h_overlap > 15:  # 15px min overlap
+                    current_group.append(j)
+                    grouped.add(j)
+                    gap_i = gap_j  # Update für nächste Iteration
+                else:
+                    # Wenn nicht genug Überlappung, beende diese Gruppe
+                    break
+            else:
+                # Wenn Abstand zu groß, beende diese Gruppe
+                break
+        
+        # Speichere Gruppe (sortiere Indizes in Reihenfolge der Rückkehr)
+        current_group.sort()
+        for idx in current_group:
+            gap_to_group[idx] = len(groups)
+        
+        groups.append(current_group)
+    
+    return groups, gap_to_group
+
 # Trainiertes Modell laden
 # Bestes Model: 3
-MODEL_PATH = 'gap_detection_model.pt'
+MODEL_PATH = './model/gap_detection_model.pt'
 
 # Prüfe ob trainiertes Modell existiert
 if not Path(MODEL_PATH).exists():
@@ -82,7 +171,7 @@ model = YOLO(MODEL_PATH)
 
 # Bild zum Testen
 IMAGE_PATH = 'test.jpg'
-results = model.predict(source=IMAGE_PATH, save=True, conf=0.10)
+results = model.predict(source=IMAGE_PATH, save=True, conf=0.25)
 
 # Ergebnisse durchgehen
 for r in results:
@@ -104,37 +193,62 @@ for r in results:
         print("   - Wurde das Modell richtig trainiert?")
         print("   - Versuche niedrigere conf (z.B. 0.1)")
     else:
-        print("\n✅ Gefundene freie Stellen (nach Filterung):")
-        # Alle erkannten freien Stellen
-        for i, idx in enumerate(keep_indices):
+        # Extrahiere Gap-Boxen aus den gefilterten Indizes
+        gaps = []
+        gap_info = []  # Speichert Box-Info für spätere Referenz
+        
+        for idx in keep_indices:
             box = r.boxes[idx]
-            class_id = int(box.cls[0])
-            confidence = float(box.conf[0])
             x1, y1, x2, y2 = box.xyxy[0].tolist()
+            gaps.append((int(x1), int(y1), int(x2), int(y2)))
+            gap_info.append({
+                'box': box,
+                'class_id': int(box.cls[0]),
+                'confidence': float(box.conf[0])
+            })
+        
+        # Gruppiere Gaps nach Nähe
+        groups, gap_to_group = group_gaps_by_proximity(gaps)
+        
+        print(f"\n✅ Gefundene freie Stellen (nach Filterung): {len(gaps)} Stellen")
+        print(f"📊 Gruppiert in {len(groups)} Gruppen\n")
+        
+        # Zeige gruppierte freie Stellen
+        for group_idx, group in enumerate(groups):
+            print(f"📍 Gruppe {group_idx + 1}: {len(group)} Stelle(n)")
             
-            print(f"  {i+1}. {r.names[class_id]}")
-            print(f"     Konfidenz: {confidence:.2%}")
-            print(f"     Box: ({int(x1)}, {int(y1)}) → ({int(x2)}, {int(y2)})")
-            print(f"     Größe: {int(x2-x1)} x {int(y2-y1)} px")
+            for pos_in_group, gap_idx in enumerate(group):
+                box = gap_info[gap_idx]
+                x1, y1, x2, y2 = gaps[gap_idx]
+                
+                print(f"   Stelle {pos_in_group + 1}:")
+                print(f"     Klasse: {r.names[box['class_id']]}")
+                print(f"     Konfidenz: {box['confidence']:.2%}")
+                print(f"     Box: ({x1}, {y1}) → ({x2}, {y2})")
+                print(f"     Größe: {x2-x1} x {y2-y1} px")
     
     # Bild mit markierten freien Stellen anzeigen (nur gefilterte)
     print(f"\n🎨 Zeige Ergebnis...")
     
-    # Manuell zeichnen mit nur den gefilterten Boxen
-    img = r.orig_img.copy()
-    for idx in keep_indices:
-        box = r.boxes[idx]
-        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-        conf = float(box.conf[0])
+    if len(keep_indices) > 0:
+        # Manuell zeichnen mit nur den gefilterten Boxen
+        img = r.orig_img.copy()
+        for gap_idx, gap in enumerate(gaps):
+            x1, y1, x2, y2 = gap
+            group_num = gap_to_group[gap_idx] + 1  # 1-based numbering
+            
+            # Box zeichnen
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            
+            # Gruppennummer als Label
+            label = f"G{group_num}"
+            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(img, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), (255, 0, 0), -1)
+            cv2.putText(img, label, (x1 + 1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        # Box zeichnen
-        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-        
-        # Label mit Confidence
-        # label = f"{conf:.2%}"
-        # cv2.putText(img, label, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    
-    annotated = img
+        annotated = img
+    else:
+        annotated = r.orig_img.copy()
     
     # Speichern
     output_path = 'yolo_detected_gaps.png'

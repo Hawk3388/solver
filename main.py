@@ -143,6 +143,8 @@ class WorksheetSolver():
         
         self.image = None
         self.detected_gaps = []
+        self.gap_groups = []  # Groups of gap indices
+        self.gap_to_group = {}  # Maps gap index to group index
         
     def load_image(self, image_path: str):
         """Load image and create a copy for processing"""
@@ -265,6 +267,90 @@ class WorksheetSolver():
             result.extend(line)
         
         return result
+    
+    def group_gaps_by_proximity(self, gaps):
+        """Group gaps that are directly below each other into groups.
+        
+        Returns:
+            List of groups, where each group is a list of gap indices (0-based) sorted by Y position
+            Also returns a mapping from gap index to group index
+        """
+        if not gaps:
+            return [], {}
+        
+        # Create index mapping: sorted_idx -> original_idx
+        indices = list(range(len(gaps)))
+        sorted_indices = sorted(indices, key=lambda i: gaps[i][1])  # Sort by Y (top to bottom)
+        
+        # Calculate average gap height as threshold
+        heights = [(gap[3] - gap[1]) for gap in gaps]
+        avg_height = sum(heights) / len(heights) if heights else 0
+        
+        # Distance threshold: gaps are "below each other" if distance < avg_height * 1.5
+        distance_threshold = avg_height * 1.5
+        
+        groups = []
+        gap_to_group = {}
+        grouped = set()
+        
+        # Process gaps from top to bottom
+        for sort_i, i in enumerate(sorted_indices):
+            if i in grouped:
+                continue
+            
+            # Start new group with current gap
+            current_group = [i]
+            grouped.add(i)
+            gap_i = gaps[i]
+            
+            # Look for gaps below this one
+            for sort_j in range(sort_i + 1, len(sorted_indices)):
+                j = sorted_indices[sort_j]
+                
+                if j in grouped:
+                    continue
+                
+                gap_j = gaps[j]
+                
+                # Check vertical distance (gap j should be below gap i)
+                vertical_distance = gap_j[1] - gap_i[3]
+                
+                # Check horizontal alignment
+                i_left, i_top, i_right, i_bottom = gap_i
+                j_left, j_top, j_right, j_bottom = gap_j
+                
+                # Calculate horizontal overlap
+                h_overlap_start = max(i_left, j_left)
+                h_overlap_end = min(i_right, j_right)
+                h_overlap = max(0, h_overlap_end - h_overlap_start)
+                
+                # Box widths
+                i_width = i_right - i_left
+                j_width = j_right - j_left
+                min_width = min(i_width, j_width)
+                
+                # Check if box j is below box i and horizontally aligned
+                if 0 < vertical_distance < distance_threshold:
+                    # At least 30% overlap or 15px minimum
+                    if h_overlap > min_width * 0.3 or h_overlap > 15:
+                        current_group.append(j)
+                        grouped.add(j)
+                        gap_i = gap_j  # Update for next iteration
+                    else:
+                        # Not enough overlap, end this group
+                        break
+                else:
+                    # Distance too large, end this group
+                    break
+            
+            # Store group (sort indices in return order)
+            current_group.sort()
+            for idx in current_group:
+                gap_to_group[idx] = len(groups)
+            
+            groups.append(current_group)
+        
+        return groups, gap_to_group
 
     def detect_gaps(self):
         self.detected_gaps = []
@@ -292,18 +378,29 @@ class WorksheetSolver():
         
         # Sort in reading order (line by line)
         self.detected_gaps = self.sort_reading_order(self.detected_gaps)
+        
+        # Group gaps by proximity (vertically aligned and close together)
+        self.gap_groups, self.gap_to_group = self.group_gaps_by_proximity(self.detected_gaps)
+        
+        print(f"📊 Gaps grouped into {len(self.gap_groups)} groups")
+        for i, group in enumerate(self.gap_groups):
+            print(f"   Group {i+1}: {len(group)} gaps (indices: {group})")
                     
         return self.detected_gaps, img
 
     def mark_gaps(self, image, gaps):
-        """Mark detected gaps in the image with numbers"""
-
+        """Mark detected gaps in the image with group numbers"""
+        
         for i, gap in enumerate(gaps):
             x1, y1, x2, y2 = gap
+            
+            # Get the group number for this gap
+            group_num = self.gap_to_group.get(i, i) + 1  # +1 for 1-based numbering
+            
             # Draw red box
             cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            # Number at top left of the box
-            label = str(i + 1)
+            # Number at top left of the box (group number)
+            label = f"G{group_num}"
             label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
             # Background for better readability
             cv2.rectangle(image, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), (0, 0, 255), -1)
@@ -311,26 +408,38 @@ class WorksheetSolver():
         return image
     
     def ask_ai_about_all_gaps(self, marked_image):
-        """Ask Gemini about the content of ALL gaps at once - just like test3"""
+        """Ask Gemini about the content of ALL gap groups at once"""
         if self.debug:
             start_time = self.time.time()
-        # Save the marked image (with boxes) just as test3 expects
+        
         thinking = None
         marked_image_path = f"{Path(self.path).stem}_marked.png"
         cv2.imwrite(marked_image_path, marked_image)
 
-        prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.detected_gaps)} gaps, one without markings.
+        # Build description of groups
+        group_descriptions = []
+        for i, group in enumerate(self.gap_groups):
+            group_num = i + 1
+            group_descriptions.append(f"Group {group_num}: {len(group)} stacked line(s) (marked as G{group_num})")
+        
+        group_text = "\n".join(group_descriptions)
 
-For each red box, read its number label and fill in the missing word(s) from the worksheet.
+        prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.gap_groups)} gap groups, one without markings.
+
+Gap groups to fill (boxes with the same group number stacked vertically belong together):
+{group_text}
+
+For each group marked with "Gn", provide ONE answer that should fill ALL lines in that group.
+The answer will be distributed across the stacked lines (first line(s) filled first, then overflow to next line).
 
 Rules:
 - Answer in the worksheet's language.
-- Only the missing word(s), nothing else.
-- Match each answer to the correct box number.
-- If a box doesn't need filling, because it is already filled or is not a gap, answer with "none".
+- Provide text that makes sense when distributed line by line.
+- Match each answer to the correct group number.
+- If a group doesn't need filling, answer with "none".
 - Do NOT overthink. These are simple language exercises. Answer quickly and directly. Only reason for about 10 sentences.
 - Look at the sheets carefully and use them as context for your answers.
-- Only answer in this exact JSON format: {{"solutions": [{{"key": box_number, "value": answer}}]}}"""
+- Only answer in this exact JSON format: {{"solutions": [{{"key": group_number, "value": answer}}]}}"""
 
         if not self.experimental:
             if not self.local:
@@ -434,64 +543,69 @@ Rules:
         return output
     
     def solve_all_gaps(self, marked_image):
-        """Solve all detected gaps with Ollama - structured!"""
+        """Solve all gap groups with Ollama - structured!"""
         if not self.detected_gaps:
             print("No gaps found!")
             return {}
         
-        print(f"🤖 Analyzing all {len(self.detected_gaps)} gaps with Ollama...")
+        print(f"🤖 Analyzing all {len(self.gap_groups)} gap groups with AI...")
         
-        # Ask Ollama about all gaps at once
-        print("📤 Sending image to Ollama...")
+        # Ask AI about all gap groups at once
+        print("📤 Sending image to AI...")
         solutions_data = self.ask_ai_about_all_gaps(marked_image)
         
         if solutions_data:
-            print("📥 Structured Ollama response received!")
+            print("📥 Structured AI response received!")
             
             # Convert structured response to our format
             solutions = {}
             
-            # solutions_data.solutions is now a list of Pair objects
+            # solutions_data.solutions is now a list of GroupPair objects
             for pair in solutions_data.solutions:
                 try:
-                    gap_id = pair.key
+                    group_id = pair.key
                     answer = pair.value
-                    gap_index = gap_id - 1  # 0-based
+                    group_index = group_id - 1  # 0-based
                     
-                    if 0 <= gap_index < len(self.detected_gaps):
-                        solutions[gap_index] = {
-                            'position': self.detected_gaps[gap_index],
+                    if 0 <= group_index < len(self.gap_groups):
+                        gap_indices = self.gap_groups[group_index]
+                        solutions[group_index] = {
+                            'gap_indices': gap_indices,
                             'solution': answer
                         }
                 except (ValueError, KeyError) as e:
-                    print(f"Error processing gap {gap_id}: {e}")
+                    print(f"Error processing group {group_id}: {e}")
                     continue
             
             return solutions
         else:
-            print("❌ No response received from Ollama.")
+            print("❌ No response received from AI.")
             return {}
     
     def fill_gaps_in_image(self, image_path: str, solutions: dict, output_path: str = "worksheet_solved.png"):
-        """Fill the solutions into the image"""
+        """Fill the solutions into grouped gaps with text flowing across multiple boxes"""
         # Load OpenCV image and convert to PIL (for Unicode/umlauts)
         cv_image = self.load_image(image_path)
         pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
         
         draw = ImageDraw.Draw(pil_image)
         
-        for gap_index, solution_data in solutions.items():
-            # Position is (x1, y1, x2, y2)
-            x1, y1, x2, y2 = solution_data['position']
-            w = x2 - x1
-            h = y2 - y1
+        for group_index, solution_data in solutions.items():
+            gap_indices = solution_data['gap_indices']
             solution = solution_data['solution']
             
             if not solution or solution.lower() == 'none':
                 continue
             
-            # Find dynamic font size
-            font_size = 40  # Start large
+            # Get all boxes for this group
+            boxes = [self.detected_gaps[idx] for idx in gap_indices]
+            
+            # Calculate total available space
+            total_width = sum(box[2] - box[0] for box in boxes)
+            avg_height = boxes[0][3] - boxes[0][1]
+            
+            # Find optimal font size for this solution
+            font_size = 40
             min_font_size = 8
             font = None
             
@@ -505,27 +619,61 @@ Rules:
                         font = ImageFont.load_default()
                         break
                 
+                # Test if text fits
                 bbox = draw.textbbox((0, 0), solution, font=font)
                 text_width = bbox[2] - bbox[0]
                 text_height = bbox[3] - bbox[1]
                 
+                # Check if it fits in available space (with padding)
                 padding = 4
-                if text_width <= w - padding and text_height <= h - padding:
-                    break
+                if text_height <= avg_height - padding:
+                    # For width, use total available width or at least one box width
+                    if text_width <= total_width - padding or text_width <= (boxes[0][2] - boxes[0][0]) - padding:
+                        break
                 
                 font_size -= 1
             
-            # Measure text size with final font
-            bbox = draw.textbbox((0, 0), solution, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
+            # Distribute text across boxes in the group
+            words = solution.split()
+            current_box_idx = 0
+            x_offset = boxes[current_box_idx][0]  # Start position in current box
             
-            # Position text centered in the box
-            text_x = x1 + (w - text_width) // 2
-            text_y = y1 + (h - text_height) // 2
-            
-            # Draw text in black
-            draw.text((text_x, text_y), solution, fill=(0, 0, 0), font=font)
+            for word in words:
+                if current_box_idx >= len(boxes):
+                    break
+                
+                # Get current box dimensions
+                x1, y1, x2, y2 = boxes[current_box_idx]
+                box_width = x2 - x1
+                box_height = y2 - y1
+                
+                # Measure word with space
+                word_with_space = word + " "
+                bbox = draw.textbbox((0, 0), word_with_space, font=font)
+                word_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+                
+                # Check if word fits in current box
+                available_width = (x2 - x_offset) - 4  # Subtract padding
+                
+                if word_width <= available_width:
+                    # Word fits in current box
+                    text_y = y1 + (box_height - text_height) // 2
+                    draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=font)
+                    x_offset += word_width
+                else:
+                    # Word doesn't fit - move to next box
+                    current_box_idx += 1
+                    
+                    if current_box_idx < len(boxes):
+                        x1, y1, x2, y2 = boxes[current_box_idx]
+                        x_offset = x1 + 2  # Small padding
+                        
+                        # Now place the word in the new box
+                        if word_width <= (x2 - x_offset) - 4:
+                            text_y = y1 + (box_height - text_height) // 2
+                            draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=font)
+                            x_offset += word_width
         
         # Convert back to OpenCV and save
         result_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -551,13 +699,18 @@ def main():
     try:
         gaps, img = solver.detect_gaps()
         
-        print(f"✅ {len(gaps)} gaps found!")
+        print(f"✅ {len(gaps)} gaps found in {len(solver.gap_groups)} groups!")
         
         marked_image = solver.mark_gaps(img, gaps)
         
         print("\n📍 Detected gaps (x, y, width, height):")
         for i, gap in enumerate(gaps):
-            print(f"  Gap {i+1}: {gap}")
+            group_num = solver.gap_to_group[i] + 1
+            print(f"  Gap {i+1} (Group {group_num}): {gap}")
+        
+        print("\n📊 Gap groups:")
+        for g_idx, group in enumerate(solver.gap_groups):
+            print(f"  Group {g_idx+1}: gaps {[idx+1 for idx in group]}")
         
         if solver.debug:
             # Ask user if AI analysis is desired
@@ -572,8 +725,10 @@ def main():
             
             if solutions:
                 print("\n✨ Solutions found:")
-                for i, sol in solutions.items():
-                    print(f"  Gap {i+1}: '{sol['solution']}'")
+                for group_idx, sol in solutions.items():
+                    group_num = group_idx + 1
+                    gap_indices = [idx+1 for idx in sol['gap_indices']]
+                    print(f"  Group {group_num} (gaps {gap_indices}): '{sol['solution']}'")
                 
                 solver.fill_gaps_in_image(path, solutions)
                 
