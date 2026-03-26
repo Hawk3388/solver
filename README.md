@@ -32,19 +32,6 @@ An AI-powered tool that automatically detects and fills in blank gaps on languag
 | `arbeitsblatt_yolo/` | Training output (weights per epoch, metrics) |
 | `raw_images/` | Source worksheet images for dataset creation |
 
-### Test Files
-
-| File | Description |
-| --- | --- |
-| `test_export_mode_to_onnx.py` | Exports the YOLO model to ONNX format |
-| `test_onnx_inference.py` | ONNX Runtime inference with `YOLOONNXInference` class |
-| `test_onnx_model.py` | Visual testing of ONNX model predictions |
-| `test_ollama.py` | Tests Ollama API integration with reasoning models |
-| `test_local_thinking_budget.py` | Local LLM thinking token budget control |
-| `test_mark_coordinates.py` | Coordinate visualization utility |
-| `test_ocr.py` | OCR-based gap detection via Ollama grounding |
-| `test_step_vl.py` | Tests Step3-VL-10B vision-language model |
-
 ## Requirements
 
 - Python 3.10+
