@@ -2,6 +2,7 @@ import os
 import tempfile
 import uuid
 import warnings
+import shutil
 import re
 
 import gradio as gr
