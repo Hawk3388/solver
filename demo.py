@@ -96,14 +96,15 @@ def solve_worksheet(image_path: str):
 		raise gr.Error(f"Could not load the gap detection model: {error}") from error
 
 	with tempfile.TemporaryDirectory() as tmp_dir:
-		unique_id = uuid.uuid4().hex
-		input_path = os.path.join(tmp_dir, f"{unique_id}.png")
-		output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
+		 unique_id = uuid.uuid4().hex
+		 ext = Path(image_path).suffix.lower() or ".png"
+   input_path = os.path.join(tmp_dir, f"{unique_id}{ext}")
+   output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
 
-		try:
-			Image.open(image_path).convert("RGB").save(input_path)
+   try:
+    shutil.copy2(image_path, input_path)
 
-			solver = WorksheetSolver(
+   solver = WorksheetSolver(
 				input_path,
 				gap_detection_model_path=model_path,
 				llm_model_name="gemini-3-flash-preview",
