@@ -700,7 +700,7 @@ Rules:
         Returns (font, is_default_bitmap_font).
         """
         font_candidates = [
-            # Repo-local (optional if you add a font file later)
+            # Repo-local fonts (if present)
             "fonts/DejaVuSans.ttf",
             "fonts/LiberationSans-Regular.ttf",
 
@@ -829,18 +829,22 @@ Rules:
                     else:
                         # If single word is too long, draw truncated chunk
                         trimmed = word
+                        trimmed_width = 0
                         while len(trimmed) > 1:
                             test = trimmed + " "
                             tb = draw.textbbox((0, 0), test, font=chosen_font)
                             tw = tb[2] - tb[0]
                             if tw <= available_width:
+                                trimmed_width = tw
                                 break
                             trimmed = trimmed[:-1]
 
                         if len(trimmed) > 0:
+                            if trimmed_width == 0:
+                                trimmed_width = draw.textbbox((0, 0), trimmed + " ", font=chosen_font)[2]
                             text_y = ny1 + (nbox_height - text_height) // 2
                             draw.text((x_offset, text_y), trimmed + " ", fill=(0, 0, 0), font=chosen_font)
-                            x_offset += draw.textbbox((0, 0), trimmed + " ", font=chosen_font)[2]
+                            x_offset += trimmed_width
 
         # Convert back to OpenCV BGR and save
         result_cv = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
