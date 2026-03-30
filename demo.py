@@ -91,7 +91,7 @@ def solve_worksheet(image_path: str):
 		raise gr.Error("Please upload a valid image file (PNG, JPG, JPEG, WEBP, BMP).")
 
 	try:
-		model_path = ensure_gap_model()
+		model_path = GAP_DETECTION_MODEL_PATH
 	except Exception as error:
 		raise gr.Error(f"Could not load the gap detection model: {error}") from error
 
