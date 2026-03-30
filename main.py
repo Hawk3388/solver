@@ -693,105 +693,161 @@ Rules:
         else:
             print("❌ No response received from AI.")
             return {}
+
+    def _load_font_with_fallback(self, font_size: int):
+        """
+        Load a scalable TrueType font across platforms.
+        Returns (font, is_default_bitmap_font).
+        """
+        font_candidates = [
+            # Repo-local (optional if you add a font file later)
+            "fonts/DejaVuSans.ttf",
+            "fonts/LiberationSans-Regular.ttf",
+
+            # Linux (Hugging Face Spaces)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+
+            # Windows
+            "arial.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+
+            # macOS
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+        ]
+
+        for font_path in font_candidates:
+            try:
+                return ImageFont.truetype(font_path, font_size), False
+            except OSError:
+                continue
+
+        # Last fallback (bitmap font, limited scaling)
+        return ImageFont.load_default(), True
     
     def fill_gaps_in_image(self, image_path: str, solutions: dict, output_path: str = "worksheet_solved.png"):
         """Fill the solutions into grouped gaps with text flowing across multiple boxes"""
         # Load OpenCV image and convert to PIL (for Unicode/umlauts)
         cv_image = self.load_image(image_path)
         pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
-        
+
         draw = ImageDraw.Draw(pil_image)
-        
+
         for group_index, solution_data in solutions.items():
             gap_indices = solution_data['gap_indices']
             solution = solution_data['solution']
-            
+
             if not solution or solution.lower() == 'none':
                 continue
-            
+
             # Get all boxes for this group
             boxes = [self.detected_gaps[idx] for idx in gap_indices]
-            
+
             # Calculate total available space
             total_width = sum(box[2] - box[0] for box in boxes)
             avg_height = boxes[0][3] - boxes[0][1]
-            
+            first_box_width = boxes[0][2] - boxes[0][0]
+
             # Find optimal font size for this solution
             font_size = 40
             min_font_size = 8
-            font = None
-            
+            chosen_font = None
+            is_default_bitmap = False
+
             while font_size >= min_font_size:
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size)
-                except OSError:
-                    try:
-                        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
-                    except OSError:
-                        font = ImageFont.load_default()
-                        break
-                
-                # Test if text fits
+                font, is_default = self._load_font_with_fallback(font_size)
+
+                # Bitmap-default font is not really scalable -> use it directly
+                if is_default:
+                    chosen_font = font
+                    is_default_bitmap = True
+                    break
+
+                # Measure full solution text
                 bbox = draw.textbbox((0, 0), solution, font=font)
                 text_width = bbox[2] - bbox[0]
                 text_height = bbox[3] - bbox[1]
-                
-                # Check if it fits in available space (with padding)
+
                 padding = 4
-                if text_height <= avg_height - padding:
-                    # For width, use total available width or at least one box width
-                    if text_width <= total_width - padding or text_width <= (boxes[0][2] - boxes[0][0]) - padding:
-                        break
-                
+                fits_height = text_height <= (avg_height - padding)
+                fits_width = (text_width <= (total_width - padding)) or (text_width <= (first_box_width - padding))
+
+                if fits_height and fits_width:
+                    chosen_font = font
+                    break
+
                 font_size -= 1
-            
+
+            # Absolute fallback safety
+            if chosen_font is None:
+                chosen_font, is_default_bitmap = self._load_font_with_fallback(min_font_size)
+
             # Distribute text across boxes in the group
             words = solution.split()
             current_box_idx = 0
             x_offset = boxes[current_box_idx][0]  # Start position in current box
-            
+
             for word in words:
                 if current_box_idx >= len(boxes):
                     break
-                
+
                 # Get current box dimensions
                 x1, y1, x2, y2 = boxes[current_box_idx][:4]
-                box_width = x2 - x1
                 box_height = y2 - y1
-                
+
                 # Measure word with space
                 word_with_space = word + " "
-                bbox = draw.textbbox((0, 0), word_with_space, font=font)
+                bbox = draw.textbbox((0, 0), word_with_space, font=chosen_font)
                 word_width = bbox[2] - bbox[0]
                 text_height = bbox[3] - bbox[1]
-                
+
                 # Check if word fits in current box
-                available_width = (x2 - x_offset) - 4  # Subtract padding
-                
+                available_width = (x2 - x_offset) - 4  # padding
+
                 if word_width <= available_width:
                     # Word fits in current box
                     text_y = y1 + (box_height - text_height) // 2
-                    draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=font)
+                    draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=chosen_font)
                     x_offset += word_width
                 else:
-                    # Word doesn't fit - move to next box
+                    # Move to next box
                     current_box_idx += 1
-                    
-                    if current_box_idx < len(boxes):
-                        x1, y1, x2, y2 = boxes[current_box_idx][:4]
-                        x_offset = x1 + 2  # Small padding
-                        
-                        # Now place the word in the new box
-                        if word_width <= (x2 - x_offset) - 4:
-                            text_y = y1 + (box_height - text_height) // 2
-                            draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=font)
-                            x_offset += word_width
-        
-        # Convert back to OpenCV and save
-        result_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-        cv2.imwrite(output_path, result_image)
-        print(f"Solved worksheet saved as: {output_path}")
-        return result_image
+                    if current_box_idx >= len(boxes):
+                        break
+
+                    nx1, ny1, nx2, ny2 = boxes[current_box_idx][:4]
+                    nbox_height = ny2 - ny1
+                    x_offset = nx1
+
+                    # Re-check fit in new box
+                    available_width = (nx2 - x_offset) - 4
+                    if word_width <= available_width:
+                        text_y = ny1 + (nbox_height - text_height) // 2
+                        draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=chosen_font)
+                        x_offset += word_width
+                    else:
+                        # If single word is too long, draw truncated chunk
+                        trimmed = word
+                        while len(trimmed) > 1:
+                            test = trimmed + " "
+                            tb = draw.textbbox((0, 0), test, font=chosen_font)
+                            tw = tb[2] - tb[0]
+                            if tw <= available_width:
+                                break
+                            trimmed = trimmed[:-1]
+
+                        if len(trimmed) > 0:
+                            text_y = ny1 + (nbox_height - text_height) // 2
+                            draw.text((x_offset, text_y), trimmed + " ", fill=(0, 0, 0), font=chosen_font)
+                            x_offset += draw.textbbox((0, 0), trimmed + " ", font=chosen_font)[2]
+
+        # Convert back to OpenCV BGR and save
+        result_cv = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        cv2.imwrite(output_path, result_cv)
+
+        if self.debug:
+            print(f"✅ Filled worksheet saved to: {output_path}")
 
 # Main program
 def main():
