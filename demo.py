@@ -18,7 +18,6 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
 GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
 RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
 
-
 def ensure_gap_model() -> str:
 	download = False
 
@@ -33,7 +32,7 @@ def ensure_gap_model() -> str:
 			download = True
 	else:
 		download = True
-	
+
 	release_response = requests.get(RELEASES_URL)
 	if release_response.status_code == 200:
 		pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
@@ -53,8 +52,8 @@ def ensure_gap_model() -> str:
 					for chunk in response.iter_content(chunk_size=8192):
 						if chunk:
 							model_file.write(chunk)
-			GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
-			break
+				GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
+				break
 		else:
 			compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
 			newer_version = compare_versions[0]
@@ -64,20 +63,20 @@ def ensure_gap_model() -> str:
 						for chunk in response.iter_content(chunk_size=8192):
 							if chunk:
 								model_file.write(chunk)
-				GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
-				break
-			else:
-				GAP_DETECTION_MODEL_PATH = str(model_path)
+					GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
+					break
+				else:
+					GAP_DETECTION_MODEL_PATH = str(model_path)
 
 	return GAP_DETECTION_MODEL_PATH
 
 
 def url_exists(url: str, timeout: float = 5.0) -> bool:
-    try:
-        r = requests.head(url, allow_redirects=True, timeout=timeout)
-        return (200 <= r.status_code < 400)
-    except requests.RequestException as e:
-        return False
+	try:
+		r = requests.head(url, allow_redirects=True, timeout=timeout)
+		return (200 <= r.status_code < 400)
+	except requests.RequestException as e:
+		return False
 
 
 def _is_allowed_image(filename: str) -> bool:
@@ -96,15 +95,16 @@ def solve_worksheet(image_path: str):
 	except Exception as error:
 		raise gr.Error(f"Could not load the gap detection model: {error}") from error
 
-	with tempfile.TemporaryDirectory() as tmp_dir:
-		unique_id = uuid.uuid4().hex
-		ext = Path(image_path).suffix.lower() or ".png"
-		input_path = os.path.join(tmp_dir, f"{unique_id}{ext}")
-		output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
-		
-		shutil.copy2(image_path, input_path)
-			
-		solver = WorksheetSolver(
+	try:
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			unique_id = uuid.uuid4().hex
+			ext = Path(image_path).suffix.lower() or ".png"
+			input_path = os.path.join(tmp_dir, f"{unique_id}{ext}")
+			output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
+
+			shutil.copy2(image_path, input_path)
+
+			solver = WorksheetSolver(
 				input_path,
 				gap_detection_model_path=model_path,
 				llm_model_name="gemini-3-flash-preview",
@@ -130,8 +130,8 @@ def solve_worksheet(image_path: str):
 			solved_image = Image.open(output_path).copy()
 			return solved_image
 
-		except Exception as error:
-			raise gr.Error(f"Processing error: {error}") from error
+	except Exception as error:
+		raise gr.Error(f"Processing error: {error}") from error
 
 
 def build_app() -> gr.Blocks:
@@ -163,7 +163,7 @@ def build_app() -> gr.Blocks:
 			with gr.Column(scale=1):
 				image_output = gr.Image(type="pil", label="Solved Worksheet")
 
-		solve_button.click(
+			solve_button.click(
 			fn=solve_worksheet,
 			inputs=image_input,
 			outputs=image_output,
