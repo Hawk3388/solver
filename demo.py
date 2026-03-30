@@ -102,8 +102,7 @@ def solve_worksheet(image_path: str):
 		input_path = os.path.join(tmp_dir, f"{unique_id}{ext}")
 		output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
 		
-		try:
-			shutil.copy2(image_path, input_path)
+		shutil.copy2(image_path, input_path)
 			
 		solver = WorksheetSolver(
 				input_path,
