@@ -47,28 +47,28 @@ def ensure_gap_model() -> str:
 		if not url_exists(GAP_MODEL_URL):
 			continue
 		if download:
+			gd_model_path = str(folder_path / version / "gap_detection_model.pt")
 			with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
-				with open(GAP_DETECTION_MODEL_PATH, "wb") as model_file:
+				with open(gd_model_path, "wb") as model_file:
 					for chunk in response.iter_content(chunk_size=8192):
 						if chunk:
 							model_file.write(chunk)
-			GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
 			break
 		else:
 			compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
 			newer_version = compare_versions[0]
 			if newer_version != latest_version:
+				gd_model_path = str(folder_path / newer_version / "gap_detection_model.pt")
 				with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
-					with open(GAP_DETECTION_MODEL_PATH, "wb") as model_file:
+					with open(gd_model_path, "wb") as model_file:
 						for chunk in response.iter_content(chunk_size=8192):
 							if chunk:
 								model_file.write(chunk)
-				GAP_DETECTION_MODEL_PATH = str(folder_path / version / "gap_detection_model.pt")
 				break
 			else:
-				GAP_DETECTION_MODEL_PATH = str(model_path)
+				gd_model_path = str(model_path)
 
-	return GAP_DETECTION_MODEL_PATH
+	return gd_model_path
 
 
 def url_exists(url: str, timeout: float = 5.0) -> bool:
@@ -90,10 +90,13 @@ def solve_worksheet(image_path: str):
 	if not _is_allowed_image(image_path):
 		raise gr.Error("Please upload a valid image file (PNG, JPG, JPEG, WEBP, BMP).")
 
-#	try:
-#		model_path = ensure_gap_model()
-#	except Exception as error:
-#		raise gr.Error(f"Could not load the gap detection model: {error}") from error
+	if not os.path.exists(GAP_DETECTION_MODEL_PATH):
+		try:
+			model_path = ensure_gap_model()
+		except Exception as error:
+			raise gr.Error(f"Could not load the gap detection model: {error}") from error
+	else:
+		model_path = GAP_DETECTION_MODEL_PATH
 
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		unique_id = uuid.uuid4().hex
@@ -105,7 +108,7 @@ def solve_worksheet(image_path: str):
 
 			solver = WorksheetSolver(
 				input_path,
-				gap_detection_model_path=GAP_DETECTION_MODEL_PATH,
+				gap_detection_model_path=model_path,
 				llm_model_name="gemini-3-flash-preview",
 				think=True,
 				local=False,
