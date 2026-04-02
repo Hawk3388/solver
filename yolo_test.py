@@ -2,6 +2,69 @@ from ultralytics import YOLO
 import cv2
 from pathlib import Path
 import numpy as np
+import requests
+import re
+import os
+
+def get_gap_model() -> str:
+	download = False
+
+	os.makedirs("./model", exist_ok=True)
+	folder_path = Path("./model")
+	model_folder_names = [p.name for p in folder_path.iterdir() if p.is_dir()]
+
+	if model_folder_names:
+		latest_version = sorted(model_folder_names, key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)[0]
+		model_path = folder_path / latest_version / "gap_detection_model.pt"
+		if not model_path.exists():
+			download = True
+	else:
+		download = True
+	
+	release_response = requests.get(RELEASES_URL)
+	if release_response.status_code == 200:
+		pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
+		versions = pattern.findall(release_response.text)
+		if not versions:
+			raise Exception("Could not determine the latest model version from GitHub releases.")
+	else:
+		raise Exception(f"Failed to fetch releases from GitHub: {release_response.status_code}")
+
+	for version in versions:
+		GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{version}/gap_detection_model.pt"
+		if not url_exists(GAP_MODEL_URL):
+			continue
+		if download:
+			gd_model_path = str(folder_path / version / "gap_detection_model.pt")
+			with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+				with open(gd_model_path, "wb") as model_file:
+					for chunk in response.iter_content(chunk_size=8192):
+						if chunk:
+							model_file.write(chunk)
+			break
+		else:
+			compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
+			newer_version = compare_versions[0]
+			if newer_version != latest_version:
+				gd_model_path = str(folder_path / newer_version / "gap_detection_model.pt")
+				with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+					with open(gd_model_path, "wb") as model_file:
+						for chunk in response.iter_content(chunk_size=8192):
+							if chunk:
+								model_file.write(chunk)
+				break
+			else:
+				gd_model_path = str(model_path)
+
+	return gd_model_path
+
+
+def url_exists(url: str, timeout: float = 5.0) -> bool:
+    try:
+        r = requests.head(url, allow_redirects=True, timeout=timeout)
+        return (200 <= r.status_code < 400)
+    except requests.RequestException as e:
+        return False
 
 def calculate_iou(box1, box2):
     """
@@ -157,8 +220,9 @@ def group_gaps_by_proximity(gaps):
     heights = [(gap[3] - gap[1]) for gap in gaps]
     avg_height = sum(heights) / len(heights) if heights else 0
     
-    # Abstands-Schwelle: Gaps sind "untereinander", wenn Abstand < durchschnittliche Höhe * 1.5
+    # Abstands-Schwelle: line-Boxen dürfen leicht überlappen oder knapp auseinanderliegen
     distance_threshold = avg_height * 1.5
+    overlap_tolerance = max(5, int(avg_height * 0.15))
     
     groups = []
     gap_to_group = {}
@@ -196,7 +260,7 @@ def group_gaps_by_proximity(gaps):
             if not is_line_class(class_name_j):
                 continue
             
-            # Prüfe vertikalen Abstand (Gap j sollte unter Gap i sein)
+            # Prüfe vertikalen Abstand (Box j darf knapp überlappen oder knapp unter Box i sein)
             vertical_distance = y1_j - y2_i
             
             # Prüfe horizontale Ausrichtung
@@ -213,8 +277,8 @@ def group_gaps_by_proximity(gaps):
             j_width = j_right - j_left
             min_width = min(i_width, j_width)
             
-            # Prüfe ob Box j unter Box i liegt und horizontal ausgerichtet ist
-            if 0 < vertical_distance < distance_threshold:
+            # Prüfe ob Box j vertikal zur gleichen Gruppe gehört und horizontal ausgerichtet ist
+            if -overlap_tolerance <= vertical_distance < distance_threshold:
                 # Mindestens 30% Überlappung oder visuell nebeneinander
                 if h_overlap > min_width * 0.3 or h_overlap > 15:  # 15px min overlap
                     current_group.append(j)
@@ -238,8 +302,8 @@ def group_gaps_by_proximity(gaps):
     return groups, gap_to_group
 
 # Trainiertes Modell laden
-# Bestes Model: 3
-MODEL_PATH = './model/gap_detection_model.pt'
+RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
+MODEL_PATH = get_gap_model()
 
 # Prüfe ob trainiertes Modell existiert
 if not Path(MODEL_PATH).exists():
