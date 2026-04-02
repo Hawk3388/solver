@@ -13,12 +13,7 @@ from main import WorksheetSolver
 
 warnings.filterwarnings("ignore")
 
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
-GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
-RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
-
-
-def ensure_gap_model() -> str:
+def get_gap_model() -> str:
 	download = False
 
 	os.makedirs("./model", exist_ok=True)
@@ -90,14 +85,6 @@ def solve_worksheet(image_path: str):
 	if not _is_allowed_image(image_path):
 		raise gr.Error("Please upload a valid image file (PNG, JPG, JPEG, WEBP, BMP).")
 
-	if not os.path.exists(GAP_DETECTION_MODEL_PATH):
-		try:
-			model_path = ensure_gap_model()
-		except Exception as error:
-			raise gr.Error(f"Could not load the gap detection model: {error}") from error
-	else:
-		model_path = GAP_DETECTION_MODEL_PATH
-
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		unique_id = uuid.uuid4().hex
 		input_path = os.path.join(tmp_dir, f"{unique_id}.png")
@@ -108,7 +95,7 @@ def solve_worksheet(image_path: str):
 
 			solver = WorksheetSolver(
 				input_path,
-				gap_detection_model_path=model_path,
+				gap_detection_model_path=MODEL_PATH,
 				llm_model_name="gemini-3-flash-preview",
 				think=True,
 				local=False,
@@ -173,6 +160,9 @@ def build_app() -> gr.Blocks:
 
 	return demo
 
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
+RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
+MODEL_PATH = get_gap_model()
 
 demo = build_app()
 

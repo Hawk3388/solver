@@ -10,7 +10,72 @@ import requests
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
 import socket
+import re
 from pathlib import Path
+
+def get_gap_model() -> str:
+	download = False
+
+	os.makedirs("./model", exist_ok=True)
+	folder_path = Path("./model")
+	model_folder_names = [p.name for p in folder_path.iterdir() if p.is_dir()]
+
+	if model_folder_names:
+		latest_version = sorted(model_folder_names, key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)[0]
+		model_path = folder_path / latest_version / "gap_detection_model.pt"
+		if not model_path.exists():
+			download = True
+	else:
+		download = True
+	
+	release_response = requests.get(RELEASES_URL)
+	if release_response.status_code == 200:
+		pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
+		versions = pattern.findall(release_response.text)
+		if not versions:
+			raise Exception("Could not determine the latest model version from GitHub releases.")
+	else:
+		raise Exception(f"Failed to fetch releases from GitHub: {release_response.status_code}")
+
+	for version in versions:
+		GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{version}/gap_detection_model.pt"
+		if not url_exists(GAP_MODEL_URL):
+			continue
+		if download:
+			gd_model_path = str(folder_path / version / "gap_detection_model.pt")
+			with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+				with open(gd_model_path, "wb") as model_file:
+					for chunk in response.iter_content(chunk_size=8192):
+						if chunk:
+							model_file.write(chunk)
+			break
+		else:
+			compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
+			newer_version = compare_versions[0]
+			if newer_version != latest_version:
+				gd_model_path = str(folder_path / newer_version / "gap_detection_model.pt")
+				with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+					with open(gd_model_path, "wb") as model_file:
+						for chunk in response.iter_content(chunk_size=8192):
+							if chunk:
+								model_file.write(chunk)
+				break
+			else:
+				gd_model_path = str(model_path)
+
+	return gd_model_path
+
+def url_exists(url: str, timeout: float = 5.0) -> bool:
+    try:
+        r = requests.head(url, allow_redirects=True, timeout=timeout)
+        return (200 <= r.status_code < 400)
+    except requests.RequestException as e:
+        return False
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS        
+
+
 
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
@@ -21,20 +86,10 @@ app = Flask("solver", template_folder=os.path.join(base_path, 'templates'))
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
+RELEASES_URL = "https://github.com/Hawk3388/solver/releases"
+MODEL_PATH = get_gap_model()
 
-GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
-        
-if not os.path.exists(GAP_DETECTION_MODEL_PATH):
-    url = "https://github.com/Hawk3388/solver/releases/download/v1.1.0/gap_detection_model.pt"
-    with requests.get(url, stream=True) as r:
-        r.raise_for_status()
-        with open("./model/gap_detection_model.pt", 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-    GAP_DETECTION_MODEL_PATH = "./model/gap_detection_model.pt"
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/')
 def index():
@@ -67,7 +122,7 @@ def solve():
 
         solver = WorksheetSolver(
             input_path,
-            gap_detection_model_path=GAP_DETECTION_MODEL_PATH,
+            gap_detection_model_path=MODEL_PATH,
             llm_model_name=model_name,
             think=think,
             local=local,
