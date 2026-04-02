@@ -354,8 +354,9 @@ class WorksheetSolver():
         heights = [(gap[3] - gap[1]) for gap in gaps]
         avg_height = sum(heights) / len(heights) if heights else 0
         
-        # Distance threshold: gaps are "below each other" if distance < avg_height * 1.5
+        # Distance threshold: line boxes may slightly overlap or be very close
         distance_threshold = avg_height * 1.5
+        overlap_tolerance = max(5, int(avg_height * 0.15))
         
         groups = []
         gap_to_group = {}
@@ -410,8 +411,8 @@ class WorksheetSolver():
                 j_width = j_right - j_left
                 min_width = min(i_width, j_width)
                 
-                # Check if box j is below box i and horizontally aligned
-                if 0 < vertical_distance < distance_threshold:
+                # Check if box j is vertically close enough and horizontally aligned
+                if -overlap_tolerance <= vertical_distance < distance_threshold:
                     # At least 30% overlap or 15px minimum
                     if h_overlap > min_width * 0.3 or h_overlap > 15:
                         current_group.append(j)
@@ -554,15 +555,29 @@ Rules:
             if not self.local:
                 image = Image.open(marked_image_path)
                 original_image = Image.open(self.path)
-                response = self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=[image, original_image, prompt],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=get_solution,
-                        thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
-                    ),
-                )
+                try:
+                    response = self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=[image, original_image, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=get_solution,
+                            thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
+                        ),
+                    )
+                except genai.errors.ServerError:
+                    if self.model_name == "gemini-3-flash-preview":
+                        print("The thinking model is currently not available - falling back to gemini-2.5-flash")
+                        self.model_name = "gemini-2.5-flash"
+                        response = self.client.models.generate_content(
+                            model=self.model_name,
+                            contents=[image, original_image, prompt],
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                response_schema=get_solution,
+                                thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
+                            ),
+                        )
                 output = response.parsed
             else:
                 if self.model_name == "qwen3-vl:8b-thinking" and self.think:
@@ -728,7 +743,7 @@ Rules:
                     try:
                         font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
                     except OSError:
-                        font = ImageFont.load_default()
+                        font = ImageFont.load_default(font_size)
                         break
                 
                 # Test if text fits

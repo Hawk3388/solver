@@ -90,10 +90,10 @@ def solve_worksheet(image_path: str):
 	if not _is_allowed_image(image_path):
 		raise gr.Error("Please upload a valid image file (PNG, JPG, JPEG, WEBP, BMP).")
 
-	try:
-		model_path = ensure_gap_model()
-	except Exception as error:
-		raise gr.Error(f"Could not load the gap detection model: {error}") from error
+#	try:
+#		model_path = ensure_gap_model()
+#	except Exception as error:
+#		raise gr.Error(f"Could not load the gap detection model: {error}") from error
 
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		unique_id = uuid.uuid4().hex
@@ -105,7 +105,7 @@ def solve_worksheet(image_path: str):
 
 			solver = WorksheetSolver(
 				input_path,
-				gap_detection_model_path=model_path,
+				gap_detection_model_path=GAP_DETECTION_MODEL_PATH,
 				llm_model_name="gemini-3-flash-preview",
 				think=True,
 				local=False,
