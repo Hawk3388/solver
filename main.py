@@ -10,6 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
+import re
+import requests
 
 # Define Pydantic models outside the class
 class Pair(BaseModel):
@@ -20,8 +22,11 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, gap_detection_model_path: str = "./model/gap_detection_model.pt", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, thinking_budget: int = 2048, debug: bool = False, experimental: bool = False):
-        self.model_path = gap_detection_model_path
+    def __init__(self, path:str, gap_detection_model_path: str = "", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, thinking_budget: int = 2048, debug: bool = False, experimental: bool = False):
+        if gap_detection_model_path:
+            self.model_path = gap_detection_model_path
+        else:
+            self.model_path = self.get_gap_model()
         self.model_name = llm_model_name
         self.local = local
         self.path = path
@@ -30,6 +35,15 @@ class WorksheetSolver():
             self.thinking_budget = thinking_budget
         self.think = think
         self.experimental = experimental
+
+        self.image = None
+        self.allowed_extensions = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
+        self.detected_gaps = []
+        self.gap_groups = []  # Groups of gap indices
+        self.gap_to_group = {}  # Maps gap index to group index
+        self.ungrouped_gap_indices = []
+        self.answer_units = []  # Line groups + single ungrouped boxes
+        self.gap_to_answer_unit = {}  # Maps any gap index to answer unit index
         
         if self.debug:
             import time
@@ -39,11 +53,16 @@ class WorksheetSolver():
             print(f"💡 Please check the path to the image and try again.")
             exit()
         else:
-            if not self.path.lower().endswith(".png"):
-                print(f"✅ Worksheet image found: {self.path}")
-                img = Image.open(self.path)
-                img.save(f"{Path(self.path).stem}_temp.png")
-                self.path = f"{Path(self.path).stem}_temp.png"
+            if self.is_allowed_image(self.path):
+                if not self.path.lower().endswith(".png"):
+                    print(f"✅ Worksheet image found: {self.path}")
+                    img = Image.open(self.path)
+                    img.save(f"{Path(self.path).stem}_temp.png")
+                    self.path = f"{Path(self.path).stem}_temp.png"
+            else:
+                print(f"❌ Invalid file type: {self.path}")
+                print(f"💡 Please upload an image file with one of the following extensions: {', '.join(self.allowed_extensions)}")
+                exit()
         if not Path(self.model_path).exists():
             print(f"❌ Trained model not found: {self.model_path}")
             print(f"💡 Run train_yolo.py first!")
@@ -57,11 +76,9 @@ class WorksheetSolver():
                 elif os.getenv("GOOGLE_API_KEY"):
                     self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
                 else:
-                    print(f"❌ .env file with Google API key not found!")
-                    print(f"💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
+                    raise ValueError("❌ .env file with Google API key not found!\n💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
             except Exception:
-                print(f"❌ .env file with Google API key not found!")
-                print(f"💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
+                raise ValueError("❌ .env file with Google API key not found!\n💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
         if self.experimental and self.local:
 
             from transformers.generation import LogitsProcessor
@@ -141,14 +158,6 @@ class WorksheetSolver():
 
         self.model = YOLO(self.model_path)
         
-        self.image = None
-        self.detected_gaps = []
-        self.gap_groups = []  # Groups of gap indices
-        self.gap_to_group = {}  # Maps gap index to group index
-        self.ungrouped_gap_indices = []
-        self.answer_units = []  # Line groups + single ungrouped boxes
-        self.gap_to_answer_unit = {}  # Maps any gap index to answer unit index
-        
     def load_image(self, image_path: str):
         """Load image and create a copy for processing"""
         self.image = cv2.imread(image_path)
@@ -156,6 +165,70 @@ class WorksheetSolver():
             raise FileNotFoundError(f"Image {image_path} not found!")
         return self.image.copy()
     
+    def get_gap_model(self) -> str:
+        releases_url = "https://github.com/Hawk3388/solver/releases"
+        download = False
+
+        os.makedirs("./model", exist_ok=True)
+        folder_path = Path("./model")
+        model_folder_names = [p.name for p in folder_path.iterdir() if p.is_dir()]
+
+        if model_folder_names:
+            latest_version = sorted(model_folder_names, key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)[0]
+            model_path = folder_path / latest_version / "gap_detection_model.pt"
+            if not model_path.exists():
+                download = True
+        else:
+            download = True
+        
+        release_response = requests.get(releases_url)
+        if release_response.status_code == 200:
+            pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
+            versions = pattern.findall(release_response.text)
+            if not versions:
+                raise Exception("Could not determine the latest model version from GitHub releases.")
+        else:
+            raise Exception(f"Failed to fetch releases from GitHub: {release_response.status_code}")
+
+        for version in versions:
+            GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{version}/gap_detection_model.pt"
+            if not self.url_exists(GAP_MODEL_URL):
+                continue
+            if download:
+                gd_model_path = str(folder_path / version / "gap_detection_model.pt")
+                with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+                    with open(gd_model_path, "wb") as model_file:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                model_file.write(chunk)
+                break
+            else:
+                compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
+                newer_version = compare_versions[0]
+                if newer_version != latest_version:
+                    gd_model_path = str(folder_path / newer_version / "gap_detection_model.pt")
+                    with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
+                        with open(gd_model_path, "wb") as model_file:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    model_file.write(chunk)
+                    break
+                else:
+                    gd_model_path = str(model_path)
+
+        return gd_model_path
+
+
+    def url_exists(self, url: str, timeout: float = 5.0) -> bool:
+        try:
+            r = requests.head(url, allow_redirects=True, timeout=timeout)
+            return (200 <= r.status_code < 400)
+        except requests.RequestException as e:
+            return False
+    
+    def is_allowed_image(self, filename: str) -> bool:
+        return "." in filename and filename.rsplit(".", 1)[1].lower() in self.allowed_extensions
+
     def calculate_iou(self, box1: list, box2: list):
         """
         Calculates Intersection over Union (IoU) between two boxes
@@ -815,7 +888,7 @@ def main():
     # For Ollama models you have to set local=True
 
     path = input("📂 Please enter the path to the worksheet image: ").strip()
-    llm_model_name = "qwen3.5:35b"
+    llm_model_name = "gemma4:26b"
     think = True
     local = True
     debug = True
