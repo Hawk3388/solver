@@ -22,7 +22,7 @@ class get_solution(BaseModel):
     solutions: List[Pair]
 
 class WorksheetSolver():
-    def __init__(self, path:str, gap_detection_model_path: str = "", llm_model_name: str = "gemini-2.5-flash", think: bool = True, local: bool = False, thinking_budget: int = 2048, debug: bool = False, experimental: bool = False):
+    def __init__(self, path:str, gap_detection_model_path: str = "", llm_model_name: str = "gemini-3-flash-preview", think: bool = True, local: bool = False, thinking_budget: int = 2048, debug: bool = False, experimental: bool = False):
         if gap_detection_model_path:
             self.model_path = gap_detection_model_path
         else:
@@ -594,6 +594,8 @@ class WorksheetSolver():
         marked_image_path = f"{Path(self.path).stem}_marked.png"
         cv2.imwrite(marked_image_path, marked_image)
 
+        ocr_text = self.ocrImage(self.path)
+
         # Build description of answer units
         group_descriptions = []
         for i, group in enumerate(self.answer_units):
@@ -607,22 +609,34 @@ class WorksheetSolver():
         
         group_text = "\n".join(group_descriptions)
 
-        prompt = f"""Look at the two images: one with red numbered boxes marking {len(self.answer_units)} answer groups, one without markings.
+        prompt = f"""
+Solve this German worksheet.
 
-Answer groups to fill:
+OCR text:
+{ocr_text}
+
+Answer groups:
 {group_text}
 
-For each group marked with its number label, provide ONE answer that should fill that group.
-The answer will be distributed across the stacked lines (first line(s) filled first, then overflow to next line).
+Fill each numbered answer position with the correct word or phrase.
 
 Rules:
-- Answer in the worksheet's language.
-- Provide text that makes sense when distributed line by line.
-- Match each answer to the correct group number.
-- If a group doesn't need filling, answer with "none".
-- Do NOT overthink. These are simple language exercises. Answer quickly and directly. Only reason for about 10 sentences.
-- Look at the sheets carefully and use them as context for your answers.
-- Only answer in this exact JSON format: {{"solutions": [{{"key": group_number, "value": answer}}]}}"""
+- Answer in German.
+- Return only the missing text.
+- Match grammar, capitalization, and singular/plural.
+- If unclear, answer "none".
+
+Return only this JSON format:
+
+{{
+  "solutions": [
+    {{
+      "key": 1,
+      "value": "answer"
+    }}
+  ]
+}}
+"""
 
         if not self.experimental:
             if not self.local:
@@ -634,24 +648,27 @@ Rules:
                         contents=[image, original_image, prompt],
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
-                            response_schema=get_solution,
+                            response_json_schema=get_solution.model_json_schema(),
                             thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
                         ),
                     )
                 except genai.errors.ServerError:
-                    if self.model_name == "gemini-3-flash-preview":
-                        print("The thinking model is currently not available - falling back to gemini-2.5-flash")
-                        self.model_name = "gemini-2.5-flash"
-                        response = self.client.models.generate_content(
-                            model=self.model_name,
-                            contents=[image, original_image, prompt],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=get_solution,
-                                thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
-                            ),
-                        )
-                output = response.parsed
+                    fallback_model = "gemini-3-flash-preview"
+                    if self.model_name == fallback_model:
+                        raise
+
+                    print(f"Gemini server error - falling back to {fallback_model}")
+                    self.model_name = fallback_model
+                    response = self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=[image, original_image, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_json_schema=get_solution.model_json_schema(),
+                            thinking_config=types.ThinkingConfig(thinking_budget=self.thinking_budget if self.think else 0),
+                        ),
+                    )
+                output = get_solution.model_validate_json(response.text)
             else:
                 if self.model_name == "qwen3-vl:8b-thinking" and self.think:
                     print("you are using an experimantal thinking model - we will stream the response and switch to an instruct model if it seems to get stuck in thinking mode")
@@ -695,11 +712,18 @@ Rules:
                 else:
                     response = ollama.chat(
                         model=self.model_name,
-                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
+                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path]}],
                         format=get_solution.model_json_schema(),
                         think=None if not 'thinking' in ollama.show(self.model_name).capabilities else True if self.think else False,
-                        options={"num_ctx": 8192}
+                        options={
+                            "num_ctx": 8192,
+                            "temperature":0.1
+                        }
                     )
+
+                    if response.message.thinking:
+                        print(response.message.thinking)
+
                     if response.message.thinking:
                         thinking = response.message.thinking
                     try:
@@ -739,6 +763,41 @@ Rules:
 
         return output
     
+    def ocrImage(self, image_path):
+
+        ocr_prompt = """
+OCR this worksheet image.
+
+Extract all visible text exactly.
+Do not solve the exercises.
+
+Replace every empty answer area (blank lines, boxes, or gaps) with:
+_____
+
+Keep the original reading order and line breaks.
+Preserve capitalization, punctuation, and German characters.
+Return only the OCR text.
+"""
+
+        if self.local:
+            response = ollama.chat(
+                model=self.model_name,
+                messages=[{"role": "user", "content": ocr_prompt, "images": [image_path]}],
+                think=False,
+                options={"temperature": 0.1},
+            )
+            return response.message.content
+
+        image = Image.open(image_path)
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=[image, ocr_prompt],
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        return response.text
+
     def solve_all_gaps(self, marked_image):
         """Solve all gap groups with Ollama - structured!"""
         if not self.detected_gaps:
@@ -783,102 +842,120 @@ Rules:
             return {}
     
     def fill_gaps_in_image(self, image_path: str, solutions: dict, output_path: str = "worksheet_solved.png"):
-        """Fill the solutions into grouped gaps with text flowing across multiple boxes"""
-        # Load OpenCV image and convert to PIL (for Unicode/umlauts)
+        """Render answers cleanly across the detected answer lines."""
+
         cv_image = self.load_image(image_path)
         pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
-        
+
         draw = ImageDraw.Draw(pil_image)
-        
+
         for group_index, solution_data in solutions.items():
             gap_indices = solution_data['gap_indices']
-            solution = solution_data['solution']
-            
+            solution = str(solution_data['solution']).strip()
+
             if not solution or solution.lower() == 'none':
                 continue
-            
-            # Get all boxes for this group
-            boxes = [self.detected_gaps[idx] for idx in gap_indices]
-            
-            # Calculate total available space
-            total_width = sum(box[2] - box[0] for box in boxes)
-            avg_height = boxes[0][3] - boxes[0][1]
-            
-            # Find optimal font size for this solution
-            font_size = 40
-            min_font_size = 8
+
+            boxes = [self.detected_gaps[idx][:4] for idx in gap_indices]
+            boxes.sort(key=lambda box: (box[1], box[0]))
+
+            # Treat vertically overlapping detections as one writable row.
+            rows = []
+            for box in boxes:
+                if not rows or box[1] >= rows[-1][3]:
+                    rows.append([box[0], box[1], box[2], box[3]])
+                else:
+                    rows[-1][0] = min(rows[-1][0], box[0])
+                    rows[-1][1] = min(rows[-1][1], box[1])
+                    rows[-1][2] = max(rows[-1][2], box[2])
+                    rows[-1][3] = max(rows[-1][3], box[3])
+
+            font_candidates = [
+                Path(__file__).resolve().parent / "fonts" / "LiberationSans-Regular.ttf",
+                Path("C:/Windows/Fonts/arial.ttf"),
+            ]
             font = None
-            
-            while font_size >= min_font_size:
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size)
-                except OSError:
+            selected_font_path = None
+            for font_path in font_candidates:
+                if font_path.exists():
                     try:
-                        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
-                    except OSError:
-                        font = ImageFont.load_default(font_size)
+                        font = ImageFont.truetype(str(font_path), 12)
+                        selected_font_path = font_path
                         break
-                
-                # Test if text fits
-                bbox = draw.textbbox((0, 0), solution, font=font)
+                    except OSError:
+                        continue
+
+            if font is None:
+                raise FileNotFoundError(
+                    "No usable answer font found. Download LiberationSans-Regular.ttf "
+                    "and place it in the fonts folder."
+                )
+
+            line_height = max(row[3] - row[1] for row in rows)
+            font_size = min(40, max(14, int(line_height * 0.72)))
+            words = solution.split()
+
+            font = ImageFont.truetype(str(selected_font_path), font_size)
+            lines = []
+            word_index = 0
+            for row in rows:
+                row_width = row[2] - row[0] - 8
+                line_words = []
+                while word_index < len(words):
+                    candidate = " ".join(line_words + [words[word_index]])
+                    candidate_width = draw.textbbox((0, 0), candidate, font=font)[2]
+                    if line_words and candidate_width > row_width:
+                        break
+                    line_words.append(words[word_index])
+                    word_index += 1
+                lines.append(" ".join(line_words))
+
+            # Keep the readable font size. If the model returned too much text
+            # for the detected lines, fit the remainder horizontally on the last line.
+            if word_index < len(words) and lines:
+                lines[-1] = " ".join(lines[-1:] + [" ".join(words[word_index:])]).strip()
+
+            for row, line in zip(rows, lines):
+                if not line:
+                    continue
+                bbox = draw.textbbox((0, 0), line, font=font)
                 text_width = bbox[2] - bbox[0]
                 text_height = bbox[3] - bbox[1]
-                
-                # Check if it fits in available space (with padding)
-                padding = 4
-                if text_height <= avg_height - padding:
-                    # For width, use total available width or at least one box width
-                    if text_width <= total_width - padding or text_width <= (boxes[0][2] - boxes[0][0]) - padding:
-                        break
-                
-                font_size -= 1
-            
-            # Distribute text across boxes in the group
-            words = solution.split()
-            current_box_idx = 0
-            x_offset = boxes[current_box_idx][0]  # Start position in current box
-            
-            for word in words:
-                if current_box_idx >= len(boxes):
-                    break
-                
-                # Get current box dimensions
-                x1, y1, x2, y2 = boxes[current_box_idx][:4]
-                box_width = x2 - x1
-                box_height = y2 - y1
-                
-                # Measure word with space
-                word_with_space = word + " "
-                bbox = draw.textbbox((0, 0), word_with_space, font=font)
-                word_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                
-                # Check if word fits in current box
-                available_width = (x2 - x_offset) - 4  # Subtract padding
-                
-                if word_width <= available_width:
-                    # Word fits in current box
-                    text_y = y1 + (box_height - text_height) // 2
-                    draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=font)
-                    x_offset += word_width
-                else:
-                    # Word doesn't fit - move to next box
-                    current_box_idx += 1
-                    
-                    if current_box_idx < len(boxes):
-                        x1, y1, x2, y2 = boxes[current_box_idx][:4]
-                        x_offset = x1 + 2  # Small padding
-                        
-                        # Now place the word in the new box
-                        if word_width <= (x2 - x_offset) - 4:
-                            text_y = y1 + (box_height - text_height) // 2
-                            draw.text((x_offset, text_y), word_with_space, fill=(0, 0, 0), font=font)
-                            x_offset += word_width
-        
-        # Convert back to OpenCV and save
-        result_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                center_x = (row[0] + row[2]) / 2
+                baseline_y = row[3] - 2
+
+                row_width = row[2] - row[0] - 8
+                if text_width <= row_width:
+                    draw.text(
+                        (center_x, baseline_y),
+                        line,
+                        fill=(20, 20, 20),
+                        font=font,
+                        anchor="ms",
+                    )
+                    continue
+
+                # Compress only horizontally; preserve the readable line height.
+                layer = Image.new("RGBA", (text_width + 4, text_height + 4), (255, 255, 255, 0))
+                layer_draw = ImageDraw.Draw(layer)
+                layer_draw.text((2 - bbox[0], 2 - bbox[1]), line, fill=(20, 20, 20, 255), font=font)
+                layer = layer.resize((row_width, layer.height), Image.Resampling.LANCZOS)
+                pil_image.paste(
+                    layer,
+                    (int(row[0] + 4), int(row[3] - layer.height - 2)),
+                    layer,
+                )
+
+
+        result_image = cv2.cvtColor(
+            np.array(pil_image),
+            cv2.COLOR_RGB2BGR
+        )
+
         cv2.imwrite(output_path, result_image)
+
         print(f"Solved worksheet saved as: {output_path}")
+
         return result_image
 
 # Main program
@@ -889,7 +966,7 @@ def main():
 
     path = input("📂 Please enter the path to the worksheet image: ").strip()
     llm_model_name = "gemma4:26b"
-    think = True
+    think = False
     local = True
     debug = True
     solver = WorksheetSolver(path, llm_model_name=llm_model_name, think=think, local=local, debug=debug)
@@ -903,7 +980,7 @@ def main():
         
         marked_image = solver.mark_gaps(img, gaps)
         
-        print("\n📍 Detected gaps (x, y, width, height):")
+        print("\n📍 Detected gaps (x, y, width, height, class):")
         for i, gap in enumerate(gaps):
             unit_num = solver.gap_to_answer_unit.get(i)
             if unit_num is not None:
@@ -917,7 +994,7 @@ def main():
         
         if solver.debug:
             # Ask user if AI analysis is desired
-            user_input = input("\n🤖 Should an AI analyze and fill the gaps? (y/n): ").lower().strip()
+            user_input = input("\n🤖 Should an AI analyze and fill the gaps? (y/N): ").lower().strip()
             if user_input in ['y', 'yes']:
                 ask = True
         else:

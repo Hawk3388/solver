@@ -39,7 +39,7 @@ def solve():
     try:
         file.save(input_path)
 
-        model_name = request.form.get('model_name', 'gemini-2.5-flash')
+        model_name = request.form.get('model_name', 'gemini-3-flash-preview')
         local = request.form.get('local', 'false') == 'true'
         think = request.form.get('think', 'true') == 'true'
         thinking_budget = int(request.form.get('thinking_budget', '2048'))

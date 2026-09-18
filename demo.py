@@ -90,4 +90,9 @@ def build_app() -> gr.Blocks:
 demo = build_app()
 
 if __name__ == "__main__":
-	demo.queue().launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", "7860")), share=True)
+	share = os.getenv("GRADIO_SHARE", "false").lower() in {"1", "true", "yes"}
+	demo.queue().launch(
+		server_name="0.0.0.0",
+		server_port=int(os.getenv("PORT", "7860")),
+		share=share,
+	)

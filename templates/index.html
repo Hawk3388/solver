@@ -101,6 +101,13 @@
             margin-top: 15px;
             display: none;
             border: 1px solid #e1e5e9;
+            object-fit: contain;
+        }
+
+        .media-area {
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .submit-btn {
@@ -168,9 +175,54 @@
 
         .result-img {
             width: 100%;
+            object-fit: contain;
             border-radius: 8px;
             border: 1px solid #e1e5e9;
             display: none;
+        }
+
+        .main-wrapper.has-image .panel {
+            min-height: 760px;
+        }
+
+        .main-wrapper.has-image .submit-btn {
+            height: 50px;
+            padding: 0 15px;
+            margin-top: auto;
+        }
+
+        .main-wrapper.has-image .download-btn {
+            height: 50px;
+            padding: 0 12px;
+            margin-top: 0;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .main-wrapper.has-image .result-area {
+            flex: 1;
+            min-height: 0;
+        }
+
+        .main-wrapper.has-image .media-area {
+            flex: 1;
+            min-height: 0;
+            margin-bottom: 15px;
+        }
+
+        .main-wrapper.has-image .preview-img,
+        .main-wrapper.has-image .result-img {
+            width: 100%;
+            height: 0;
+            margin-top: 0;
+        }
+
+        .main-wrapper.has-image .preview-img {
+            height: 100%;
+        }
+
+        .main-wrapper.has-image .result-img {
+            height: 100%;
         }
 
         /* Spinner */
@@ -452,6 +504,12 @@
             .main-wrapper {
                 flex-direction: column;
             }
+            .main-wrapper.has-image .panel {
+                min-height: 0;
+            }
+            .main-wrapper.has-image .result-area {
+                min-height: 200px;
+            }
             .settings-panel {
                 width: 300px;
                 right: -320px;
@@ -477,7 +535,9 @@
                 </div>
             </div>
 
-            <img class="preview-img" id="preview-img" alt="Preview" style="cursor:pointer" onclick="document.getElementById('file').click()" title="Click to change image">
+            <div class="media-area">
+                <img class="preview-img" id="preview-img" alt="Preview" style="cursor:pointer" onclick="document.getElementById('file').click()" title="Click to change image">
+            </div>
 
             <button class="submit-btn" id="solve-btn" onclick="solveWorksheet()">Solve</button>
         </div>
@@ -486,7 +546,7 @@
         <div class="panel">
             <div class="panel-title">Solution</div>
 
-            <div class="result-area">
+            <div class="media-area result-area">
                 <div class="result-placeholder" id="result-placeholder">
                     Upload a worksheet and click "Solve" to get the solution.
                 </div>
@@ -515,8 +575,8 @@
 
         <div class="setting-group">
             <label for="model-name">LLM Model Name</label>
-            <div class="setting-desc">e.g. gemini-2.5-flash, qwen3.5:35b</div>
-            <input type="text" id="model-name" value="gemini-2.5-flash">
+            <div class="setting-desc">e.g. gemini-3-flash-preview, qwen3.5:35b</div>
+            <input type="text" id="model-name" value="gemini-3-flash-preview">
         </div>
 
         <div class="settings-divider"></div>
@@ -600,6 +660,7 @@
 
         fileInput.addEventListener('change', function () {
             if (this.files && this.files[0]) {
+                document.querySelector('.main-wrapper').classList.add('has-image');
                 document.getElementById('upload-group').style.display = 'none';
                 const reader = new FileReader();
                 reader.onload = function (e) {
@@ -678,7 +739,7 @@
                     resultImg.src = src;
                     resultImg.style.display = 'block';
                     downloadBtn.href = src;
-                    downloadBtn.style.display = 'block';
+                    downloadBtn.style.display = 'flex';
                 }
             } catch (err) {
                 showError('Connection error: ' + err.message);
