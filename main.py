@@ -960,12 +960,12 @@ Return only the OCR text.
 
 # Main program
 def main():
-    # Best results with gemini-3-flash-preview (local: qwen3.5:35b for 16 GB VRAM + 32 GB RAM)
+    # Best results with gemini-3-flash-preview (local: qwen3.8 for 16 GB VRAM + 32 GB RAM)
     # For Gemini you have to use a Google API-key in a .env file
     # For Ollama models you have to set local=True
 
     path = input("📂 Please enter the path to the worksheet image: ").strip()
-    llm_model_name = "gemma4:26b"
+    llm_model_name = "qwen3.8"
     think = False
     local = True
     debug = True
