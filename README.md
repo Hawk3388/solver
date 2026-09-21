@@ -28,16 +28,26 @@ The current solving prompt is optimized for German worksheets. The detection and
 
 ## Processing Pipeline
 
-```mermaid
-flowchart LR
-    A[Worksheet image] --> N[Validation and normalization]
-    N --> B[YOLO detection]
-    B --> C[Overlap filtering and grouping]
-    C --> D[Numbered answer units]
-    D --> E[OCR and multimodal LLM]
-    E --> F[Structured solutions]
-    F --> G[Line-aware rendering]
-    G --> H[Solved PNG]
+```text
+Worksheet image
+      │
+      ▼
+Validation and normalization
+      │
+      ▼
+YOLO detection and answer grouping
+      │
+      ▼
+OCR and multimodal solving
+      │
+      ▼
+Structured answer mapping
+      │
+      ▼
+Line-aware rendering
+      │
+      ▼
+Solved PNG
 ```
 
 1. The upload is validated, EXIF-oriented, converted to RGB, and bounded to a safe resolution.
