@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import shutil
 import tempfile
 import uuid
 import warnings
@@ -16,11 +18,13 @@ def solve_worksheet(image_path: str):
 
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		unique_id = uuid.uuid4().hex
-		input_path = os.path.join(tmp_dir, f"{unique_id}.png")
+		input_suffix = Path(image_path).suffix.lower() or ".png"
+		input_path = os.path.join(tmp_dir, f"{unique_id}{input_suffix}")
 		output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
+		solver = None
 
 		try:
-			Image.open(image_path).convert("RGB").save(input_path)
+			shutil.copyfile(image_path, input_path)
 
 			solver = WorksheetSolver(
 				input_path,
@@ -42,13 +46,21 @@ def solve_worksheet(image_path: str):
 			if not solutions:
 				raise gr.Error("The AI could not find any solutions.")
 
-			solver.fill_gaps_in_image(input_path, solutions, output_path=output_path)
+			solver.fill_gaps_in_image(
+				solver.path,
+				solutions,
+				output_path=output_path,
+			)
 
-			solved_image = Image.open(output_path).copy()
+			with Image.open(output_path) as output_image:
+				solved_image = output_image.copy()
 			return solved_image
 
 		except Exception as error:
 			raise gr.Error(f"Processing error: {error}") from error
+		finally:
+			if solver is not None:
+				solver.close()
 
 def build_app() -> gr.Blocks:
 	with gr.Blocks(title="Worksheet Solver", css="""

@@ -95,13 +95,39 @@
             font-weight: 500;
         }
 
-        .preview-img {
+        .image-grid {
             width: 100%;
-            border-radius: 8px;
-            margin-top: 15px;
             display: none;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            overflow-y: auto;
+            align-content: start;
+        }
+
+        .image-card {
+            min-width: 0;
+            padding: 10px;
+            background: #f8f9fa;
             border: 1px solid #e1e5e9;
+            border-radius: 8px;
+        }
+
+        .image-card img {
+            display: block;
+            width: 100%;
+            height: 240px;
             object-fit: contain;
+            background: white;
+            border-radius: 6px;
+        }
+
+        .image-card-name {
+            margin-top: 8px;
+            color: #555;
+            font-size: 13px;
+            line-height: 1.3;
+            text-align: center;
+            overflow-wrap: anywhere;
         }
 
         .media-area {
@@ -173,12 +199,14 @@
             padding: 40px 20px;
         }
 
-        .result-img {
-            width: 100%;
-            object-fit: contain;
-            border-radius: 8px;
-            border: 1px solid #e1e5e9;
-            display: none;
+        .image-card .download-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: auto;
+            margin-top: 8px;
+            padding: 9px;
+            font-size: 14px;
         }
 
         .main-wrapper.has-image .panel {
@@ -210,19 +238,9 @@
             margin-bottom: 15px;
         }
 
-        .main-wrapper.has-image .preview-img,
-        .main-wrapper.has-image .result-img {
-            width: 100%;
-            height: 0;
-            margin-top: 0;
-        }
-
-        .main-wrapper.has-image .preview-img {
+        .main-wrapper.has-image .image-grid {
             height: 100%;
-        }
-
-        .main-wrapper.has-image .result-img {
-            height: 100%;
+            max-height: 650px;
         }
 
         /* Spinner */
@@ -262,6 +280,7 @@
             margin-bottom: 15px;
             display: none;
             text-align: center;
+            white-space: pre-line;
         }
 
         .info-text {
@@ -528,15 +547,15 @@
             <div class="error-msg" id="error-msg"></div>
 
             <div class="form-group" id="upload-group">
-                <label for="file">Worksheet (Image):</label>
+                <label for="file">Worksheets (Images):</label>
                 <div class="file-input" onclick="document.getElementById('file').click()">
-                    <div>📁 Click here to select an image</div>
-                    <input type="file" id="file" name="file" accept=".png,.jpg,.jpeg,.webp,.bmp">
+                    <div>📁 Click here to select up to 10 images</div>
+                    <input type="file" id="file" name="files" accept=".png,.jpg,.jpeg,.webp,.bmp" multiple>
                 </div>
             </div>
 
             <div class="media-area">
-                <img class="preview-img" id="preview-img" alt="Preview" style="cursor:pointer" onclick="document.getElementById('file').click()" title="Click to change image">
+                <div class="image-grid" id="preview-grid"></div>
             </div>
 
             <button class="submit-btn" id="solve-btn" onclick="solveWorksheet()">Solve</button>
@@ -548,18 +567,16 @@
 
             <div class="media-area result-area">
                 <div class="result-placeholder" id="result-placeholder">
-                    Upload a worksheet and click "Solve" to get the solution.
+                    Upload one or more worksheets and click "Solve" to get the solutions.
                 </div>
 
                 <div class="spinner-wrapper" id="spinner">
                     <div class="spinner"></div>
-                    <div class="spinner-text">AI is solving the worksheet...</div>
+                    <div class="spinner-text">AI is solving the worksheets...</div>
                 </div>
 
-                <img class="result-img" id="result-img" alt="Solved Worksheet">
+                <div class="image-grid" id="result-grid"></div>
             </div>
-
-            <a class="download-btn" id="download-btn" download="worksheet_solved.png">⬇ Download Solution</a>
         </div>
     </div>
 
@@ -577,6 +594,36 @@
             <label for="model-name">LLM Model Name</label>
             <div class="setting-desc">e.g. gemini-3-flash-preview, qwen3.8</div>
             <input type="text" id="model-name" value="gemini-3-flash-preview">
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group">
+            <div class="toggle-switch">
+                <div class="toggle-label">
+                    <span>Auto-Rotate Page</span>
+                    <span>Rotate landscape photos to portrait orientation</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="auto-rotate-page">
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group">
+            <div class="toggle-switch">
+                <div class="toggle-label">
+                    <span>Correct Perspective</span>
+                    <span>Try to straighten photographed page edges</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="correct-perspective">
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
         </div>
 
         <div class="settings-divider"></div>
@@ -623,7 +670,7 @@
             <div class="toggle-switch">
                 <div class="toggle-label">
                     <span>Debug Mode</span>
-                    <span>Keep temp files and show timing info</span>
+                    <span>Show timing and model diagnostics</span>
                 </div>
                 <label class="switch">
                     <input type="checkbox" id="debug-mode">
@@ -650,25 +697,76 @@
 
     <div class="info-text">
         <strong>How it works:</strong>
-        Upload an image of a worksheet with gaps &bull; The AI detects the gaps and fills them in automatically &bull; Download the solved worksheet as a PNG
+        Upload up to 10 worksheet images &bull; The AI processes them sequentially &bull; Download each solved worksheet as a PNG
     </div>
 
     <script>
         const fileInput = document.getElementById('file');
-        const previewImg = document.getElementById('preview-img');
-        const fileNameDisplay = document.getElementById('file-name');
+        const previewGrid = document.getElementById('preview-grid');
+        const resultGrid = document.getElementById('result-grid');
+
+        function updateSolveButtonLabel() {
+            const count = fileInput.files.length;
+            document.getElementById('solve-btn').textContent =
+                count > 1 ? `Solve ${count} Worksheets` : 'Solve';
+        }
+
+        function createImageCard(src, filename, downloadName = null) {
+            const card = document.createElement('div');
+            card.className = 'image-card';
+
+            const image = document.createElement('img');
+            if (src) {
+                image.src = src;
+            }
+            image.alt = filename;
+            card.appendChild(image);
+
+            const caption = document.createElement('div');
+            caption.className = 'image-card-name';
+            caption.textContent = filename;
+            card.appendChild(caption);
+
+            if (downloadName) {
+                const download = document.createElement('a');
+                download.className = 'download-btn';
+                download.href = src;
+                download.download = downloadName;
+                download.textContent = '⬇ Download';
+                card.appendChild(download);
+            }
+            return card;
+        }
 
         fileInput.addEventListener('change', function () {
-            if (this.files && this.files[0]) {
+            const files = Array.from(this.files || []);
+            previewGrid.replaceChildren();
+            resultGrid.replaceChildren();
+            resultGrid.style.display = 'none';
+            document.getElementById('error-msg').style.display = 'none';
+
+            if (files.length) {
                 document.querySelector('.main-wrapper').classList.add('has-image');
                 document.getElementById('upload-group').style.display = 'none';
-                const reader = new FileReader();
-                reader.onload = function (e) {
-                    previewImg.src = e.target.result;
-                    previewImg.style.display = 'block';
-                };
-                reader.readAsDataURL(this.files[0]);
+                previewGrid.style.display = 'grid';
+                files.forEach(file => {
+                    const card = createImageCard('', file.name);
+                    card.style.cursor = 'pointer';
+                    card.title = 'Click to change the selected images';
+                    card.addEventListener('click', () => fileInput.click());
+                    previewGrid.appendChild(card);
+
+                    const reader = new FileReader();
+                    reader.onload = event => {
+                        card.querySelector('img').src = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                });
+                if (files.length > 10) {
+                    showError('Please select no more than 10 images.');
+                }
             }
+            updateSolveButtonLabel();
         });
 
         // Thinking budget slider
@@ -692,36 +790,40 @@
         });
 
         async function solveWorksheet() {
-            const file = fileInput.files[0];
-            if (!file) {
-                showError('Please select an image first.');
+            const files = Array.from(fileInput.files || []);
+            if (!files.length) {
+                showError('Please select at least one image first.');
+                return;
+            }
+            if (files.length > 10) {
+                showError('Please select no more than 10 images.');
                 return;
             }
 
             const btn = document.getElementById('solve-btn');
             const spinner = document.getElementById('spinner');
             const placeholder = document.getElementById('result-placeholder');
-            const resultImg = document.getElementById('result-img');
-            const downloadBtn = document.getElementById('download-btn');
             const errorMsg = document.getElementById('error-msg');
 
             // Reset
             errorMsg.style.display = 'none';
-            resultImg.style.display = 'none';
-            downloadBtn.style.display = 'none';
+            resultGrid.replaceChildren();
+            resultGrid.style.display = 'none';
             placeholder.style.display = 'none';
             spinner.style.display = 'flex';
             btn.disabled = true;
-            btn.textContent = 'Solving...';
+            btn.textContent = files.length > 1 ? 'Solving batch...' : 'Solving...';
 
             const formData = new FormData();
-            formData.append('file', file);
+            files.forEach(file => formData.append('files', file));
             formData.append('model_name', document.getElementById('model-name').value);
             formData.append('local', document.getElementById('local-mode').checked);
             formData.append('think', document.getElementById('thinking').checked);
             formData.append('thinking_budget', Math.pow(2, parseInt(document.getElementById('thinking-budget').value)));
             formData.append('debug', document.getElementById('debug-mode').checked);
             formData.append('experimental', document.getElementById('experimental-mode').checked);
+            formData.append('auto_rotate_page', document.getElementById('auto-rotate-page').checked);
+            formData.append('correct_perspective', document.getElementById('correct-perspective').checked);
 
             try {
                 const response = await fetch('/solve', {
@@ -731,15 +833,28 @@
 
                 const data = await response.json();
 
+                const detailedErrors = (data.errors || []).map(
+                    item => `${item.filename}: ${item.error}`
+                );
+
                 if (!response.ok || data.error) {
-                    showError(data.error || 'An unknown error occurred.');
+                    showError(detailedErrors.join('\n') || data.error || 'An unknown error occurred.');
                     placeholder.style.display = 'block';
                 } else {
-                    const src = 'data:image/png;base64,' + data.image;
-                    resultImg.src = src;
-                    resultImg.style.display = 'block';
-                    downloadBtn.href = src;
-                    downloadBtn.style.display = 'flex';
+                    const images = data.images || [{
+                        filename: 'worksheet_solved.png',
+                        image: data.image
+                    }];
+                    images.forEach(item => {
+                        const src = 'data:image/png;base64,' + item.image;
+                        resultGrid.appendChild(
+                            createImageCard(src, item.filename, item.filename)
+                        );
+                    });
+                    resultGrid.style.display = 'grid';
+                    if (detailedErrors.length) {
+                        showError('Some files failed:\n' + detailedErrors.join('\n'));
+                    }
                 }
             } catch (err) {
                 showError('Connection error: ' + err.message);
@@ -747,7 +862,7 @@
             } finally {
                 spinner.style.display = 'none';
                 btn.disabled = false;
-                btn.textContent = 'Solve';
+                updateSolveButtonLabel();
             }
         }
 

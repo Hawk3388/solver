@@ -1,16 +1,18 @@
 import warnings
 warnings.filterwarnings('ignore')
-from main import WorksheetSolver
+from main import WorksheetSolver, solve_batch
 import os
 import sys
-import uuid
 import base64
 import tempfile
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
 import socket
 from pathlib import Path
-from PIL import Image, UnidentifiedImageError
+from worksheet_solver.images import (
+    ImageNormalizationError,
+    validate_image_file,
+)
 
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
@@ -18,12 +20,20 @@ else:
     base_path = os.path.dirname(os.path.abspath(__file__))
 
 app = Flask("solver", template_folder=os.path.join(base_path, 'templates'))
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_BATCH_FILES = 10
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE * MAX_BATCH_FILES
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
+
+print('Loading shared gap detection model...')
+DETECTION_RUNTIME = WorksheetSolver.preload_detection_model()
+print(f'Gap detection model ready: {DETECTION_RUNTIME.model_path}')
 
 @app.errorhandler(413)
 def file_too_large(_error):
-    return jsonify({'error': 'The image is larger than the 10 MB upload limit.'}), 413
+    return jsonify({
+        'error': 'The upload exceeds the 100 MB total batch limit.'
+    }), 413
 
 @app.route('/')
 def index():
@@ -31,33 +41,24 @@ def index():
 
 @app.route('/solve', methods=['POST'])
 def solve():
-    if 'file' not in request.files:
+    files = request.files.getlist('files')
+    if not files:
+        files = request.files.getlist('file')
+    files = [file for file in files if file.filename]
+
+    if not files:
         return jsonify({'error': 'No file selected.'}), 400
+    if len(files) > MAX_BATCH_FILES:
+        return jsonify({
+            'error': f'A maximum of {MAX_BATCH_FILES} images is allowed per batch.'
+        }), 400
 
-    file = request.files['file']
-
-    if not file.filename:
-        return jsonify({'error': 'No file selected.'}), 400
-
-    ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        allowed = ', '.join(sorted(ALLOWED_EXTENSIONS))
-        return jsonify({'error': f'Unsupported file type. Allowed: {allowed}'}), 400
-
-    tmp_dir = tempfile.mkdtemp()
-    unique_id = uuid.uuid4().hex
-    input_path = os.path.join(tmp_dir, f"{unique_id}{ext}")
-    output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='worksheet_upload_'
+    )
+    tmp_dir = temporary_directory.name
 
     try:
-        file.save(input_path)
-
-        try:
-            with Image.open(input_path) as uploaded_image:
-                uploaded_image.verify()
-        except (UnidentifiedImageError, OSError):
-            return jsonify({'error': 'The uploaded file is not a valid image.'}), 400
-
         model_name = request.form.get('model_name', 'gemini-3-flash-preview')
         if not model_name.strip():
             return jsonify({'error': 'Model name must not be empty.'}), 400
@@ -70,47 +71,120 @@ def solve():
         thinking_budget = max(0, min(thinking_budget, 32768))
         debug = request.form.get('debug', 'false') == 'true'
         experimental = request.form.get('experimental', 'false') == 'true'
-
-        solver = WorksheetSolver(
-            input_path,
-            llm_model_name=model_name,
-            think=think,
-            local=local,
-            thinking_budget=thinking_budget,
-            debug=debug,
-            experimental=experimental
+        auto_rotate_page = (
+            request.form.get('auto_rotate_page', 'false') == 'true'
         )
-        gaps, img = solver.detect_gaps()
+        correct_perspective = (
+            request.form.get('correct_perspective', 'false') == 'true'
+        )
+        if experimental and not local:
+            return jsonify({
+                'error': 'Experimental mode requires Local Mode.'
+            }), 400
 
-        if not gaps:
-            return jsonify({'error': 'No gaps detected in the worksheet.'}), 422
+        input_paths = []
+        original_names = {}
+        errors = []
+        allowed = ', '.join(sorted(ALLOWED_EXTENSIONS))
 
-        marked_image = solver.mark_gaps(img, gaps)
-        solutions = solver.solve_all_gaps(marked_image)
+        for index, file in enumerate(files, start=1):
+            original_name = Path(file.filename).name
+            ext = Path(original_name).suffix.lower()
+            if ext not in ALLOWED_EXTENSIONS:
+                errors.append({
+                    'filename': original_name,
+                    'error': f'Unsupported file type. Allowed: {allowed}',
+                })
+                continue
 
-        if not solutions:
-            return jsonify({'error': 'The AI could not find any solutions.'}), 422
+            input_path = Path(tmp_dir) / f"upload_{index}{ext}"
+            file.save(input_path)
+            if input_path.stat().st_size > MAX_FILE_SIZE:
+                errors.append({
+                    'filename': original_name,
+                    'error': 'The image is larger than the 10 MB per-file limit.',
+                })
+                input_path.unlink(missing_ok=True)
+                continue
 
-        solver.fill_gaps_in_image(input_path, solutions, output_path=output_path)
+            try:
+                validate_image_file(input_path)
+            except ImageNormalizationError as error:
+                errors.append({
+                    'filename': original_name,
+                    'error': str(error),
+                })
+                input_path.unlink(missing_ok=True)
+                continue
 
-        with open(output_path, 'rb') as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
+            resolved_path = input_path.resolve()
+            input_paths.append(resolved_path)
+            original_names[resolved_path] = original_name
 
-        return jsonify({'image': image_data})
+        if not input_paths:
+            return jsonify({
+                'error': 'None of the selected files could be processed.',
+                'errors': errors,
+            }), 400
+
+        batch_results = solve_batch(
+            input_paths,
+            tmp_dir,
+            solver_kwargs={
+                'llm_model_name': model_name,
+                'think': think,
+                'local': local,
+                'thinking_budget': thinking_budget,
+                'debug': debug,
+                'experimental': experimental,
+                'auto_rotate_page': auto_rotate_page,
+                'correct_perspective': correct_perspective,
+                'detection_runtime': DETECTION_RUNTIME,
+            },
+            solver_class=WorksheetSolver,
+        )
+
+        images = []
+        used_download_names = set()
+        for result in batch_results:
+            original_name = original_names[result.source_path]
+            if not result.success:
+                errors.append({
+                    'filename': original_name,
+                    'error': result.error,
+                })
+                continue
+
+            with open(result.output_path, 'rb') as solved_file:
+                image_data = base64.b64encode(solved_file.read()).decode('utf-8')
+            base_name = f'{Path(original_name).stem}_solved'
+            download_name = f'{base_name}.png'
+            suffix = 2
+            while download_name.lower() in used_download_names:
+                download_name = f'{base_name}_{suffix}.png'
+                suffix += 1
+            used_download_names.add(download_name.lower())
+            images.append({
+                'filename': download_name,
+                'image': image_data,
+            })
+
+        if not images:
+            return jsonify({
+                'error': 'The selected worksheets could not be solved.',
+                'errors': errors,
+            }), 422
+
+        response = {'images': images, 'errors': errors}
+        if len(images) == 1:
+            response['image'] = images[0]['image']
+        return jsonify(response), 207 if errors else 200
 
     except Exception as e:
         return jsonify({'error': f'Processing error: {e}'}), 500
 
     finally:
-        for f in Path(tmp_dir).glob('*'):
-            try:
-                f.unlink()
-            except OSError:
-                pass
-        try:
-            os.rmdir(tmp_dir)
-        except OSError:
-            pass
+        temporary_directory.cleanup()
 
 if __name__ == '__main__':
     host = '0.0.0.0'
