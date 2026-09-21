@@ -12,6 +12,7 @@ from ultralytics import YOLO
 from pathlib import Path
 import re
 import requests
+import tempfile
 
 # Define Pydantic models outside the class
 class Pair(BaseModel):
@@ -23,18 +24,21 @@ class get_solution(BaseModel):
 
 class WorksheetSolver():
     def __init__(self, path:str, gap_detection_model_path: str = "", llm_model_name: str = "gemini-3-flash-preview", think: bool = True, local: bool = False, thinking_budget: int = 2048, debug: bool = False, experimental: bool = False):
+        self.debug = debug
+        self.model_name = llm_model_name
+        self.local = local
+        self.path = str(path)
+        self.thinking_budget = thinking_budget
+        self.think = think
+        self.experimental = experimental
+
+        if self.experimental and not self.local:
+            raise ValueError("Experimental mode requires local mode.")
+
         if gap_detection_model_path:
             self.model_path = gap_detection_model_path
         else:
             self.model_path = self.get_gap_model()
-        self.model_name = llm_model_name
-        self.local = local
-        self.path = path
-        self.debug = debug
-        if think:
-            self.thinking_budget = thinking_budget
-        self.think = think
-        self.experimental = experimental
 
         self.image = None
         self.allowed_extensions = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
@@ -44,41 +48,48 @@ class WorksheetSolver():
         self.ungrouped_gap_indices = []
         self.answer_units = []  # Line groups + single ungrouped boxes
         self.gap_to_answer_unit = {}  # Maps any gap index to answer unit index
+        self.converted_image_path = None
         
         if self.debug:
             import time
             self.time = time
         if not Path(self.path).exists():
-            print(f"❌ Worksheet image not found: {self.path}")
-            print(f"💡 Please check the path to the image and try again.")
-            exit()
+            raise FileNotFoundError(f"Worksheet image not found: {self.path}")
         else:
             if self.is_allowed_image(self.path):
                 if not self.path.lower().endswith(".png"):
-                    print(f"✅ Worksheet image found: {self.path}")
-                    img = Image.open(self.path)
-                    img.save(f"{Path(self.path).stem}_temp.png")
-                    self.path = f"{Path(self.path).stem}_temp.png"
+                    print(f"Worksheet image found: {self.path}")
+                    source_path = Path(self.path)
+                    descriptor, converted_name = tempfile.mkstemp(
+                        prefix=f"{source_path.stem}_",
+                        suffix="_temp.png",
+                        dir=source_path.parent,
+                    )
+                    os.close(descriptor)
+                    converted_path = Path(converted_name)
+                    try:
+                        with Image.open(source_path) as img:
+                            img.convert("RGB").save(converted_path)
+                    except Exception:
+                        converted_path.unlink(missing_ok=True)
+                        raise
+                    self.path = str(converted_path)
+                    self.converted_image_path = self.path
             else:
-                print(f"❌ Invalid file type: {self.path}")
-                print(f"💡 Please upload an image file with one of the following extensions: {', '.join(self.allowed_extensions)}")
-                exit()
+                raise ValueError(
+                    f"Invalid file type. Allowed types: {', '.join(sorted(self.allowed_extensions))}"
+                )
         if not Path(self.model_path).exists():
-            print(f"❌ Trained model not found: {self.model_path}")
-            print(f"💡 Run train_yolo.py first!")
-            print(f"\nIf available, change MODEL_PATH to the correct location")
-            exit()
+            raise FileNotFoundError(f"Gap detection model not found: {self.model_path}")
         if not self.local and not self.experimental:
-            try:
-                if os.path.exists(".env"):
-                    load_dotenv()
-                    self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-                elif os.getenv("GOOGLE_API_KEY"):
-                    self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-                else:
-                    raise ValueError("❌ .env file with Google API key not found!\n💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
-            except Exception:
-                raise ValueError("❌ .env file with Google API key not found!\n💡 Please create a .env file with your Google API key as GOOGLE_API_KEY=your_key and try again.")
+            if os.path.exists(".env"):
+                load_dotenv()
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "Google API key not found. Set GOOGLE_API_KEY in the environment or .env file."
+                )
+            self.client = genai.Client(api_key=api_key)
         if self.experimental and self.local:
 
             from transformers.generation import LogitsProcessor
@@ -136,20 +147,19 @@ class WorksheetSolver():
                 bnb_4bit_quant_type="nf4"
             )
 
-            tokenizer = AutoTokenizer.from_pretrained(self.model)
+            tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
             if self.think:
                 processor = ThinkingTokenBudgetProcessor(tokenizer, max_thinking_tokens=self.thinking_budget)
             else:
-                # print("For the experimental mode thinking will be enabled")
-                processor = ThinkingTokenBudgetProcessor(tokenizer, max_thinking_tokens=self.thinking_budget)
+                processor = ThinkingTokenBudgetProcessor(tokenizer, max_thinking_tokens=0)
 
             schema_parser = JsonSchemaParser(get_solution.model_json_schema())
             self.prefix_function = build_transformers_prefix_allowed_tokens_fn(tokenizer, schema_parser)
 
             self.pipe = pipeline(
                 "image-text-to-text", 
-                model=self.model, 
+                model=self.model_name,
                 max_new_tokens=4096, 
                 logits_processor=[processor], 
                 device=0,
@@ -167,56 +177,63 @@ class WorksheetSolver():
     
     def get_gap_model(self) -> str:
         releases_url = "https://github.com/Hawk3388/solver/releases"
-        download = False
-
         os.makedirs("./model", exist_ok=True)
         folder_path = Path("./model")
         model_folder_names = [p.name for p in folder_path.iterdir() if p.is_dir()]
-
-        if model_folder_names:
-            latest_version = sorted(model_folder_names, key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)[0]
-            model_path = folder_path / latest_version / "gap_detection_model.pt"
-            if not model_path.exists():
-                download = True
-        else:
-            download = True
-        
-        release_response = requests.get(releases_url)
-        if release_response.status_code == 200:
-            pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
-            versions = pattern.findall(release_response.text)
-            if not versions:
-                raise Exception("Could not determine the latest model version from GitHub releases.")
-        else:
-            raise Exception(f"Failed to fetch releases from GitHub: {release_response.status_code}")
-
-        for version in versions:
-            GAP_MODEL_URL = f"https://github.com/Hawk3388/solver/releases/download/{version}/gap_detection_model.pt"
-            if not self.url_exists(GAP_MODEL_URL):
-                continue
-            if download:
-                gd_model_path = str(folder_path / version / "gap_detection_model.pt")
-                with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
-                    with open(gd_model_path, "wb") as model_file:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                model_file.write(chunk)
+        version_pattern = re.compile(r"^v\d+\.\d+\.\d+$")
+        installed_versions = [name for name in model_folder_names if version_pattern.match(name)]
+        installed_versions.sort(
+            key=lambda value: tuple(map(int, value.lstrip("v").split("."))),
+            reverse=True,
+        )
+        installed_model = None
+        for version in installed_versions:
+            candidate = folder_path / version / "gap_detection_model.pt"
+            if candidate.exists():
+                installed_model = candidate
                 break
-            else:
-                compare_versions = sorted([latest_version, version], key=lambda s: list(map(int, s.lstrip("v").split("."))), reverse=True)
-                newer_version = compare_versions[0]
-                if newer_version != latest_version:
-                    gd_model_path = str(folder_path / newer_version / "gap_detection_model.pt")
-                    with requests.get(GAP_MODEL_URL, stream=True, timeout=60) as response:
-                        with open(gd_model_path, "wb") as model_file:
+
+        # Do not add a network round-trip to every worksheet. Releases can be
+        # updated explicitly; automatic download is only needed on first use.
+        if installed_model:
+            return str(installed_model)
+
+        try:
+            release_response = requests.get(releases_url, timeout=8)
+            release_response.raise_for_status()
+            pattern = re.compile(r"<h2[^>]*>(v\d+\.\d+\.\d+)</h2>")
+            remote_versions = pattern.findall(release_response.text)
+            remote_versions.sort(
+                key=lambda value: tuple(map(int, value.lstrip("v").split("."))),
+                reverse=True,
+            )
+
+            for version in remote_versions:
+                model_url = f"https://github.com/Hawk3388/solver/releases/download/{version}/gap_detection_model.pt"
+                if not self.url_exists(model_url):
+                    continue
+
+                target = folder_path / version / "gap_detection_model.pt"
+                temporary_target = target.with_suffix(".pt.part")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with requests.get(model_url, stream=True, timeout=60) as response:
+                        response.raise_for_status()
+                        with open(temporary_target, "wb") as model_file:
                             for chunk in response.iter_content(chunk_size=8192):
                                 if chunk:
                                     model_file.write(chunk)
-                    break
-                else:
-                    gd_model_path = str(model_path)
+                    temporary_target.replace(target)
+                finally:
+                    temporary_target.unlink(missing_ok=True)
+                return str(target)
+        except requests.RequestException as error:
+            if self.debug:
+                print(f"Model update check skipped: {error}")
 
-        return gd_model_path
+        raise FileNotFoundError(
+            "No gap detection model is installed and the latest model could not be downloaded."
+        )
 
 
     def url_exists(self, url: str, timeout: float = 5.0) -> bool:
@@ -359,6 +376,207 @@ class WorksheetSolver():
             max(b[2] for b in boxes),
             max(b[3] for b in boxes),
         )
+
+    def _boxes_to_rows(self, boxes):
+        """Return writable rows in top-to-bottom order.
+
+        YOLO boxes for consecutive ruled lines can overlap because they include
+        some of the writing area above the underline. They are only the same
+        row when their vertical centres are nearly identical.
+        """
+        rows = []
+        sorted_boxes = sorted(
+            boxes,
+            key=lambda item: ((item[1] + item[3]) / 2, item[0]),
+        )
+        for box in sorted_boxes:
+            x1, y1, x2, y2 = map(int, box[:4])
+            if not rows:
+                rows.append([x1, y1, x2, y2])
+                continue
+
+            previous = rows[-1]
+            previous_height = max(1, previous[3] - previous[1])
+            current_height = max(1, y2 - y1)
+            previous_center = (previous[1] + previous[3]) / 2
+            current_center = (y1 + y2) / 2
+            same_row_tolerance = max(2, min(previous_height, current_height) * 0.25)
+
+            if abs(current_center - previous_center) <= same_row_tolerance:
+                previous[0] = min(previous[0], x1)
+                previous[1] = min(previous[1], y1)
+                previous[2] = max(previous[2], x2)
+                previous[3] = max(previous[3], y2)
+            else:
+                rows.append([x1, y1, x2, y2])
+        return rows
+
+    @staticmethod
+    def _normalise_solution_text(solution):
+        """Remove common model boilerplate and collapse whitespace."""
+        text = re.sub(r"\s+", " ", str(solution)).strip()
+        text = re.sub(r"^(?:antwort|lösung)\s*:\s*", "", text, flags=re.IGNORECASE)
+        return text.strip(" \t\r\n\"'")
+
+    @staticmethod
+    def _preferred_answer_font_size(image_width, rows):
+        """Choose a document-scale font size instead of using line-box height.
+
+        Detectors often return a two-pixel-high underline on large scans, so the
+        detection height is not a useful proxy for the surrounding print size.
+        """
+        preferred = max(8, min(48, int(round(image_width / 55))))
+
+        if len(rows) > 1:
+            baselines = [row[3] for row in rows]
+            spacings = [b - a for a, b in zip(baselines, baselines[1:]) if b > a]
+            if spacings:
+                preferred = min(preferred, max(8, int(min(spacings) * 0.76)))
+
+        return preferred
+
+    @staticmethod
+    def _fit_words_to_rows(draw, text, rows, font, padding):
+        """Greedily wrap text and report how many words were consumed."""
+        words = text.split()
+        lines = []
+        word_index = 0
+
+        for row in rows:
+            width = max(1, row[2] - row[0] - (2 * padding))
+            line_words = []
+
+            while word_index < len(words):
+                candidate = " ".join(line_words + [words[word_index]])
+                bbox = draw.textbbox((0, 0), candidate, font=font)
+                candidate_width = bbox[2] - bbox[0]
+                if candidate_width > width:
+                    break
+                line_words.append(words[word_index])
+                word_index += 1
+
+            lines.append(" ".join(line_words))
+
+        return lines, word_index
+
+    @staticmethod
+    def _ellipsize(draw, text, font, width):
+        """Fit text to one row without distorting glyphs."""
+        if not text:
+            return ""
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if bbox[2] - bbox[0] <= width:
+            return text
+
+        suffix = "…"
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate = text[:middle].rstrip() + suffix
+            bbox = draw.textbbox((0, 0), candidate, font=font)
+            if bbox[2] - bbox[0] <= width:
+                low = middle
+            else:
+                high = middle - 1
+        return text[:low].rstrip() + suffix if low else suffix
+
+    def _answer_capacity(self, unit, image_width):
+        """Estimate how much text visibly fits in an answer unit."""
+        boxes = [self.detected_gaps[idx][:4] for idx in unit]
+        rows = self._boxes_to_rows(boxes)
+        if not rows:
+            return 0, 0
+
+        font_size = self._preferred_answer_font_size(image_width, rows)
+        padding = max(3, int(round(image_width * 0.005)))
+        usable_width = sum(max(1, row[2] - row[0] - 2 * padding) for row in rows)
+        # Liberation Sans averages roughly half a font-size per German character.
+        max_characters = max(1, int(usable_width / max(1, font_size * 0.54)))
+        return len(rows), max_characters
+
+    @staticmethod
+    def _find_underline_y(source_pixels, row):
+        """Locate the actual printed underline inside a detected row."""
+        image_height, image_width = source_pixels.shape[:2]
+        x1 = max(0, int(row[0]))
+        x2 = min(image_width, int(row[2]))
+        search_margin = max(5, int(round(image_width / 110)))
+        y1 = max(0, int(row[1]) - search_margin)
+        y2 = min(image_height, int(row[3]) + search_margin + 1)
+        if x2 <= x1 or y2 <= y1:
+            return int(row[3])
+
+        crop = source_pixels[y1:y2, x1:x2]
+        grayscale = np.mean(crop[:, :, :3], axis=2)
+        # Scanned worksheet rules are often medium gray rather than black.
+        dark_pixels_per_y = np.sum(grayscale < 210, axis=1)
+        # A worksheet line normally spans most of its detection box. Requiring
+        # more than half the width rejects shorter borders from hint/callout
+        # boxes, which otherwise look exactly like underlines.
+        minimum_support = max(10, int((x2 - x1) * 0.55))
+        candidates = np.flatnonzero(dark_pixels_per_y >= minimum_support)
+
+        # The underline is the lowest long, dark horizontal feature in the box.
+        # Choosing the lowest candidate also disambiguates overlapping row boxes.
+        if candidates.size:
+            return y1 + int(candidates[-1])
+        return int(row[3])
+
+    @staticmethod
+    def _find_underlines_for_rows(source_pixels, rows):
+        """Find and assign real worksheet lines to detected rows top-to-bottom.
+
+        This uses the complete answer-area width, so short borders from hint
+        boxes are rejected even when the detector mistakes them for a line.
+        """
+        if not rows:
+            return []
+
+        image_height, image_width = source_pixels.shape[:2]
+        x1 = max(0, min(int(row[0]) for row in rows))
+        x2 = min(image_width, max(int(row[2]) for row in rows))
+        search_margin = max(8, int(round(image_width * 0.025)))
+        y1 = max(0, min(int(row[1]) for row in rows) - search_margin)
+        y2 = min(image_height, max(int(row[3]) for row in rows) + search_margin + 1)
+        if x2 <= x1 or y2 <= y1:
+            return [int(row[3]) for row in rows]
+
+        crop = source_pixels[y1:y2, x1:x2]
+        grayscale = np.mean(crop[:, :, :3], axis=2)
+        dark_pixels_per_y = np.sum(grayscale < 210, axis=1)
+        minimum_support = max(10, int((x2 - x1) * 0.55))
+        candidate_pixels = np.flatnonzero(dark_pixels_per_y >= minimum_support)
+
+        # Collapse the multiple pixel rows of a thick/antialiased rule into one
+        # baseline, using its lower edge.
+        candidate_lines = []
+        for relative_y in candidate_pixels:
+            absolute_y = y1 + int(relative_y)
+            if candidate_lines and absolute_y <= candidate_lines[-1][-1] + 1:
+                candidate_lines[-1].append(absolute_y)
+            else:
+                candidate_lines.append([absolute_y])
+        candidate_lines = [line[-1] for line in candidate_lines]
+
+        if len(candidate_lines) < len(rows):
+            return [
+                WorksheetSolver._find_underline_y(source_pixels, row)
+                for row in rows
+            ]
+
+        # Assign distinct physical lines monotonically. Reserving enough
+        # candidates for the remaining rows prevents multiple detections from
+        # snapping to the same underline.
+        assigned = []
+        start = 0
+        for row_index, row in enumerate(rows):
+            remaining_rows = len(rows) - row_index - 1
+            final_index = len(candidate_lines) - remaining_rows
+            choices = range(start, final_index)
+            best_index = min(choices, key=lambda index: abs(candidate_lines[index] - row[3]))
+            assigned.append(candidate_lines[best_index])
+            start = best_index + 1
+        return assigned
 
     def sort_answer_units_reading_order(self, units, gaps):
         """Sort answer units globally by reading order: top->bottom, left->right."""
@@ -517,12 +735,12 @@ class WorksheetSolver():
         for r in results:
             if len(r.boxes) > 0:
                 keep_indices = self.filter_overlapping_boxes(r.boxes, iou_threshold=0.5)
-                print(f"🔍 After overlap filtering: {len(keep_indices)} boxes")
+                print(f"After overlap filtering: {len(keep_indices)} boxes")
             else:
                 keep_indices = []
             if len(keep_indices) == 0:
-                print("\n❌ No gaps detected!")
-                print("💡 Check:")
+                print("\nNo gaps detected!")
+                print("Check:")
                 print("   - Is the image a worksheet?")
                 print("   - Was the model trained correctly?")
                 print("   - Try lower conf (e.g. 0.1)")
@@ -552,11 +770,11 @@ class WorksheetSolver():
             for gap_idx in unit:
                 self.gap_to_answer_unit[gap_idx] = unit_idx
         
-        print(f"📊 Line-boxes grouped into {len(self.gap_groups)} groups")
+        print(f"Line-boxes grouped into {len(self.gap_groups)} groups")
         for i, group in enumerate(self.gap_groups):
             print(f"   Group {i+1}: {len(group)} gaps (indices: {group})")
-        print(f"📌 Ungrouped boxes (e.g. gap): {len(self.ungrouped_gap_indices)}")
-        print(f"🧠 Total AI answer units: {len(self.answer_units)}")
+        print(f"Ungrouped boxes (e.g. gap): {len(self.ungrouped_gap_indices)}")
+        print(f"Total AI answer units: {len(self.answer_units)}")
                     
         return self.detected_gaps, img
 
@@ -591,21 +809,36 @@ class WorksheetSolver():
             start_time = self.time.time()
         
         thinking = None
-        marked_image_path = f"{Path(self.path).stem}_marked.png"
-        cv2.imwrite(marked_image_path, marked_image)
+        source_path = Path(self.path)
+        descriptor, marked_image_path = tempfile.mkstemp(
+            prefix=f"{source_path.stem}_",
+            suffix="_marked.png",
+            dir=source_path.parent,
+        )
+        os.close(descriptor)
+        if not cv2.imwrite(marked_image_path, marked_image):
+            Path(marked_image_path).unlink(missing_ok=True)
+            raise OSError(f"Could not write temporary marked image: {marked_image_path}")
 
         ocr_text = self.ocrImage(self.path)
 
         # Build description of answer units
         group_descriptions = []
+        if self.image is not None:
+            image_width = self.image.shape[1]
+        else:
+            with Image.open(self.path) as source_image:
+                image_width = source_image.width
         for i, group in enumerate(self.answer_units):
             group_num = i + 1
             first_idx = group[0]
             class_name = str(self.detected_gaps[first_idx][4]) if len(self.detected_gaps[first_idx]) > 4 else "gap"
-            if len(group) > 1:
-                group_descriptions.append(f"Group {group_num}: {len(group)} stacked line boxes (marked as {group_num})")
-            else:
-                group_descriptions.append(f"Group {group_num}: 1 single {class_name} box (marked as {group_num})")
+            row_count, max_characters = self._answer_capacity(group, image_width)
+            kind = "open answer area" if row_count > 1 else f"single {class_name} gap"
+            group_descriptions.append(
+                f"Group {group_num}: {kind}, {row_count} writable line(s), "
+                f"approximately {max_characters} characters maximum"
+            )
         
         group_text = "\n".join(group_descriptions)
 
@@ -618,13 +851,17 @@ OCR text:
 Answer groups:
 {group_text}
 
-Fill each numbered answer position with the correct word or phrase.
+Fill each numbered answer position with the exact text that belongs there.
 
 Rules:
 - Answer in German.
-- Return only the missing text.
+- For an inline gap, return only the missing word or short phrase. Never repeat the surrounding sentence.
+- For an open answer area, give a concise direct answer, not an explanation of your reasoning.
+- Stay within the approximate character limit stated for each group.
+- Do not add labels such as "Antwort:" or "Lösung:".
 - Match grammar, capitalization, and singular/plural.
 - If unclear, answer "none".
+- Return every group exactly once and use its number as the key.
 
 Return only this JSON format:
 
@@ -712,7 +949,7 @@ Return only this JSON format:
                 else:
                     response = ollama.chat(
                         model=self.model_name,
-                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path]}],
+                        messages=[{"role": "user", "content": prompt, "images": [marked_image_path, self.path]}],
                         format=get_solution.model_json_schema(),
                         think=None if not 'thinking' in ollama.show(self.model_name).capabilities else True if self.think else False,
                         options={
@@ -721,22 +958,20 @@ Return only this JSON format:
                         }
                     )
 
-                    if response.message.thinking:
-                        print(response.message.thinking)
-
-                    if response.message.thinking:
-                        thinking = response.message.thinking
+                    thinking = getattr(response.message, "thinking", None)
+                    if thinking:
+                        print(thinking)
                     try:
                         output = get_solution.model_validate_json(response.message.content)
                     except Exception as e:
-                        print(f"Error validating JSON response: {e}")
                         if self.debug:
                             if thinking:
                                 print(f"Thinking content:\n{thinking}")
                             print(f"Full response content:\n{response.message.content}")
-                            print(f"⏱️ Debug mode ON - timing enabled")
+                            print("Debug mode ON - timing enabled")
                             end_time = self.time.time()
-                            print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
+                            print(f"Time taken: {end_time - start_time:.2f} seconds")
+                        raise ValueError(f"The AI returned an invalid response: {e}") from e
         else:
             if self.local:
                 messages = [{"role": "user", "content": [
@@ -749,14 +984,14 @@ Return only this JSON format:
                 output = get_solution.model_validate_json(response[-1])
         
         if not self.debug:
-            if os.path.exists(self.path) and self.path.endswith("_temp.png"):
-                os.remove(self.path)
+            if self.converted_image_path and os.path.exists(self.converted_image_path):
+                os.remove(self.converted_image_path)
             if os.path.exists(marked_image_path):
                 os.remove(marked_image_path)
         else:  
-            print(f"⏱️ Debug mode ON - timing enabled")
+            print("Debug mode ON - timing enabled")
             end_time = self.time.time()
-            print(f"⏱️ Time taken: {end_time - start_time:.2f} seconds")
+            print(f"Time taken: {end_time - start_time:.2f} seconds")
             if thinking:
                 print(f"Thinking: {thinking}")
             print(f"AI output:\n{output}")
@@ -807,14 +1042,14 @@ Return only the OCR text.
             print("No answer units found to solve.")
             return {}
         
-        print(f"🤖 Analyzing all {len(self.answer_units)} answer units with AI...")
+        print(f"Analyzing all {len(self.answer_units)} answer units with AI...")
         
         # Ask AI about all gap groups at once
-        print("📤 Sending image to AI...")
+        print("Sending image to AI...")
         solutions_data = self.ask_ai_about_all_gaps(marked_image)
         
         if solutions_data:
-            print("📥 Structured AI response received!")
+            print("Structured AI response received!")
             
             # Convert structured response to our format
             solutions = {}
@@ -838,121 +1073,114 @@ Return only the OCR text.
             
             return solutions
         else:
-            print("❌ No response received from AI.")
+            print("No response received from AI.")
             return {}
     
     def fill_gaps_in_image(self, image_path: str, solutions: dict, output_path: str = "worksheet_solved.png"):
-        """Render answers cleanly across the detected answer lines."""
+        """Render readable answers at the scale of the source document."""
 
         cv_image = self.load_image(image_path)
         pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
-
+        source_pixels = np.array(pil_image)
         draw = ImageDraw.Draw(pil_image)
 
+        font_candidates = [
+            Path(__file__).resolve().parent / "fonts" / "LiberationSans-Regular.ttf",
+            Path("C:/Windows/Fonts/arial.ttf"),
+        ]
+        font_path = next((path for path in font_candidates if path.exists()), None)
+        if font_path is None:
+            raise FileNotFoundError(
+                "No usable answer font found. Place LiberationSans-Regular.ttf "
+                "in the fonts folder."
+            )
+
+        image_width = pil_image.width
+        padding = max(3, int(round(image_width * 0.005)))
+        answer_colour = (0, 0, 0)
+
         for group_index, solution_data in solutions.items():
-            gap_indices = solution_data['gap_indices']
-            solution = str(solution_data['solution']).strip()
+            gap_indices = solution_data.get('gap_indices', [])
+            solution = self._normalise_solution_text(solution_data.get('solution', ''))
 
             if not solution or solution.lower() == 'none':
                 continue
 
-            boxes = [self.detected_gaps[idx][:4] for idx in gap_indices]
-            boxes.sort(key=lambda box: (box[1], box[0]))
-
-            # Treat vertically overlapping detections as one writable row.
-            rows = []
-            for box in boxes:
-                if not rows or box[1] >= rows[-1][3]:
-                    rows.append([box[0], box[1], box[2], box[3]])
-                else:
-                    rows[-1][0] = min(rows[-1][0], box[0])
-                    rows[-1][1] = min(rows[-1][1], box[1])
-                    rows[-1][2] = max(rows[-1][2], box[2])
-                    rows[-1][3] = max(rows[-1][3], box[3])
-
-            font_candidates = [
-                Path(__file__).resolve().parent / "fonts" / "LiberationSans-Regular.ttf",
-                Path("C:/Windows/Fonts/arial.ttf"),
+            boxes = [
+                self.detected_gaps[idx][:4]
+                for idx in gap_indices
+                if 0 <= idx < len(self.detected_gaps)
             ]
-            font = None
-            selected_font_path = None
-            for font_path in font_candidates:
-                if font_path.exists():
-                    try:
-                        font = ImageFont.truetype(str(font_path), 12)
-                        selected_font_path = font_path
-                        break
-                    except OSError:
-                        continue
+            rows = self._boxes_to_rows(boxes)
+            if not rows:
+                continue
+            is_ruled_answer = all(
+                self.is_line_class(self.detected_gaps[idx][4])
+                for idx in gap_indices
+                if 0 <= idx < len(self.detected_gaps)
+            )
 
-            if font is None:
-                raise FileNotFoundError(
-                    "No usable answer font found. Download LiberationSans-Regular.ttf "
-                    "and place it in the fonts folder."
-                )
-
-            line_height = max(row[3] - row[1] for row in rows)
-            font_size = min(40, max(14, int(line_height * 0.72)))
-            words = solution.split()
-
-            font = ImageFont.truetype(str(selected_font_path), font_size)
+            preferred_size = self._preferred_answer_font_size(image_width, rows)
+            minimum_size = max(7, int(round(preferred_size * 0.72)))
             lines = []
             word_index = 0
-            for row in rows:
-                row_width = row[2] - row[0] - 8
-                line_words = []
-                while word_index < len(words):
-                    candidate = " ".join(line_words + [words[word_index]])
-                    candidate_width = draw.textbbox((0, 0), candidate, font=font)[2]
-                    if line_words and candidate_width > row_width:
-                        break
-                    line_words.append(words[word_index])
-                    word_index += 1
-                lines.append(" ".join(line_words))
+            font = None
 
-            # Keep the readable font size. If the model returned too much text
-            # for the detected lines, fit the remainder horizontally on the last line.
-            if word_index < len(words) and lines:
-                lines[-1] = " ".join(lines[-1:] + [" ".join(words[word_index:])]).strip()
+            # Use the largest natural font that fits all available rows.
+            for font_size in range(preferred_size, minimum_size - 1, -1):
+                font = ImageFont.truetype(str(font_path), font_size)
+                candidate_lines, consumed = self._fit_words_to_rows(
+                    draw, solution, rows, font, padding
+                )
+                if consumed == len(solution.split()):
+                    lines = candidate_lines
+                    word_index = consumed
+                    break
 
-            for row, line in zip(rows, lines):
-                if not line:
-                    continue
-                bbox = draw.textbbox((0, 0), line, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                center_x = (row[0] + row[2]) / 2
-                baseline_y = row[3] - 2
-
-                row_width = row[2] - row[0] - 8
-                if text_width <= row_width:
-                    draw.text(
-                        (center_x, baseline_y),
-                        line,
-                        fill=(20, 20, 20),
-                        font=font,
-                        anchor="ms",
-                    )
-                    continue
-
-                # Compress only horizontally; preserve the readable line height.
-                layer = Image.new("RGBA", (text_width + 4, text_height + 4), (255, 255, 255, 0))
-                layer_draw = ImageDraw.Draw(layer)
-                layer_draw.text((2 - bbox[0], 2 - bbox[1]), line, fill=(20, 20, 20, 255), font=font)
-                layer = layer.resize((row_width, layer.height), Image.Resampling.LANCZOS)
-                pil_image.paste(
-                    layer,
-                    (int(row[0] + 4), int(row[3] - layer.height - 2)),
-                    layer,
+            if not lines:
+                font = ImageFont.truetype(str(font_path), minimum_size)
+                lines, word_index = self._fit_words_to_rows(
+                    draw, solution, rows, font, padding
                 )
 
+            # Excessively verbose model output is clipped gracefully instead of
+            # being squeezed into an unreadable horizontal strip.
+            words = solution.split()
+            if word_index < len(words):
+                last_row = rows[-1]
+                last_width = max(1, last_row[2] - last_row[0] - (2 * padding))
+                remaining = " ".join(words[word_index:])
+                combined = " ".join(part for part in [lines[-1], remaining] if part)
+                lines[-1] = self._ellipsize(draw, combined, font, last_width)
+
+            underline_positions = self._find_underlines_for_rows(source_pixels, rows)
+            for row, line, underline_y in zip(rows, lines, underline_positions):
+                if not line:
+                    continue
+                # Keep glyphs clearly above the printed underline. Descenders
+                # may approach it, but the line must never cut through letters.
+                baseline_y = underline_y - max(2, int(round(font.size * 0.24)))
+                if is_ruled_answer:
+                    x = row[0] + padding
+                    anchor = "ls"
+                else:
+                    x = (row[0] + row[2]) / 2
+                    anchor = "ms"
+                draw.text(
+                    (x, baseline_y),
+                    line,
+                    fill=answer_colour,
+                    font=font,
+                    anchor=anchor,
+                )
 
         result_image = cv2.cvtColor(
             np.array(pil_image),
             cv2.COLOR_RGB2BGR
         )
 
-        cv2.imwrite(output_path, result_image)
+        if not cv2.imwrite(output_path, result_image):
+            raise OSError(f"Could not write solved worksheet: {output_path}")
 
         print(f"Solved worksheet saved as: {output_path}")
 
@@ -964,7 +1192,7 @@ def main():
     # For Gemini you have to use a Google API-key in a .env file
     # For Ollama models you have to set local=True
 
-    path = input("📂 Please enter the path to the worksheet image: ").strip()
+    path = input("Please enter the path to the worksheet image: ").strip()
     llm_model_name = "qwen3.8"
     think = False
     local = True
@@ -972,15 +1200,15 @@ def main():
     solver = WorksheetSolver(path, llm_model_name=llm_model_name, think=think, local=local, debug=debug)
 
     ask = False
-    print("🔍 Loading image and detecting gaps...")
+    print("Loading image and detecting gaps...")
     try:
         gaps, img = solver.detect_gaps()
         
-        print(f"✅ {len(gaps)} boxes found, {len(solver.gap_groups)} line groups, {len(solver.ungrouped_gap_indices)} ungrouped!")
+        print(f"{len(gaps)} boxes found, {len(solver.gap_groups)} line groups, {len(solver.ungrouped_gap_indices)} ungrouped!")
         
         marked_image = solver.mark_gaps(img, gaps)
         
-        print("\n📍 Detected gaps (x, y, width, height, class):")
+        print("\nDetected gaps (x, y, width, height, class):")
         for i, gap in enumerate(gaps):
             unit_num = solver.gap_to_answer_unit.get(i)
             if unit_num is not None:
@@ -988,13 +1216,13 @@ def main():
             else:
                 print(f"  Box {i+1} (ungrouped): {gap}")
         
-        print("\n📊 Gap groups:")
+        print("\nGap groups:")
         for g_idx, group in enumerate(solver.gap_groups):
             print(f"  Group {g_idx+1}: gaps {[idx+1 for idx in group]}")
         
         if solver.debug:
             # Ask user if AI analysis is desired
-            user_input = input("\n🤖 Should an AI analyze and fill the gaps? (y/N): ").lower().strip()
+            user_input = input("\nShould an AI analyze and fill the gaps? (y/N): ").lower().strip()
             if user_input in ['y', 'yes']:
                 ask = True
         else:
@@ -1004,7 +1232,7 @@ def main():
             solutions = solver.solve_all_gaps(marked_image)
             
             if solutions:
-                print("\n✨ Solutions found:")
+                print("\nSolutions found:")
                 for group_idx, sol in solutions.items():
                     group_num = group_idx + 1
                     gap_indices = [idx+1 for idx in sol['gap_indices']]
@@ -1012,16 +1240,16 @@ def main():
                 
                 solver.fill_gaps_in_image(path, solutions)
                 
-                print("\n📁 Result saved. Press any key to exit...")
+                print("\nResult saved. Press any key to exit...")
             else:
-                print("❌ No solutions received.")
+                print("No solutions received.")
         else:
-            print("📁 Gap detection only")
+            print("Gap detection only")
         
     except FileNotFoundError as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
     main()

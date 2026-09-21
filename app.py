@@ -9,7 +9,8 @@ import tempfile
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
 import socket
-from pathlib import Path   
+from pathlib import Path
+from PIL import Image, UnidentifiedImageError
 
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
@@ -18,6 +19,11 @@ else:
 
 app = Flask("solver", template_folder=os.path.join(base_path, 'templates'))
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
+
+@app.errorhandler(413)
+def file_too_large(_error):
+    return jsonify({'error': 'The image is larger than the 10 MB upload limit.'}), 413
 
 @app.route('/')
 def index():
@@ -30,19 +36,38 @@ def solve():
 
     file = request.files['file']
 
+    if not file.filename:
+        return jsonify({'error': 'No file selected.'}), 400
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        allowed = ', '.join(sorted(ALLOWED_EXTENSIONS))
+        return jsonify({'error': f'Unsupported file type. Allowed: {allowed}'}), 400
+
     tmp_dir = tempfile.mkdtemp()
     unique_id = uuid.uuid4().hex
-    ext = file.filename.rsplit('.', 1)[1].lower()
-    input_path = os.path.join(tmp_dir, f"{unique_id}.{ext}")
+    input_path = os.path.join(tmp_dir, f"{unique_id}{ext}")
     output_path = os.path.join(tmp_dir, f"{unique_id}_solved.png")
 
     try:
         file.save(input_path)
 
+        try:
+            with Image.open(input_path) as uploaded_image:
+                uploaded_image.verify()
+        except (UnidentifiedImageError, OSError):
+            return jsonify({'error': 'The uploaded file is not a valid image.'}), 400
+
         model_name = request.form.get('model_name', 'gemini-3-flash-preview')
+        if not model_name.strip():
+            return jsonify({'error': 'Model name must not be empty.'}), 400
         local = request.form.get('local', 'false') == 'true'
         think = request.form.get('think', 'true') == 'true'
-        thinking_budget = int(request.form.get('thinking_budget', '2048'))
+        try:
+            thinking_budget = int(request.form.get('thinking_budget', '2048'))
+        except ValueError:
+            return jsonify({'error': 'Thinking budget must be a number.'}), 400
+        thinking_budget = max(0, min(thinking_budget, 32768))
         debug = request.form.get('debug', 'false') == 'true'
         experimental = request.form.get('experimental', 'false') == 'true'
 
