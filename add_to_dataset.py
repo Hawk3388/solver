@@ -1,11 +1,11 @@
 """
-Einzelne Bilder zum bestehenden Dataset hinzufügen und direkt im Editor überprüfen.
-Erkennt Boxen mit dem YOLO Modell, öffnet den Box-Editor zum Korrigieren,
-und fügt das Bild dann ins Dataset ein (80/20 Split wird beibehalten).
+Add images to an existing dataset and review them in the box editor.
+The script detects boxes with YOLO, opens the editor for corrections, and then
+adds each image while preserving the 80/20 split.
 
-Verwendung:
-    python add_to_dataset.py bild1.png bild2.jpg ...
-    python add_to_dataset.py              # fragt interaktiv nach Bildern
+Usage:
+    python add_to_dataset.py image1.png image2.jpg ...
+    python add_to_dataset.py              # asks for images interactively
 """
 
 import cv2
@@ -16,17 +16,17 @@ from pathlib import Path
 from ultralytics import YOLO
 from edit_boxes import BoxEditor
 
-# ── Konfiguration ──────────────────────────────────────────
+# -- Configuration -----------------------------------------------------------
 DATASET_DIR = "dataset"
 YOLO_MODEL = "./model/gap_detection_model.pt"
 YOLO_CONF = 0.25
 TRAIN_SPLIT = 0.8  # 80% train, 20% val
 VISUALIZE = True
-# ───────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 
 def count_dataset_images(dataset_dir):
-    """Zählt aktuelle Bilder im Dataset pro Split"""
+    """Count the current dataset images in each split."""
     dataset_path = Path(dataset_dir)
     image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'}
     
@@ -41,8 +41,9 @@ def count_dataset_images(dataset_dir):
 
 def choose_split(dataset_dir, train_split=0.8):
     """
-    Wählt train oder val basierend auf dem aktuellen Verhältnis.
-    Füllt den Split auf, der am weitesten vom Soll-Verhältnis entfernt ist.
+    Select train or validation based on the current ratio.
+
+    The image is assigned to the split furthest below its target share.
     """
     counts = count_dataset_images(dataset_dir)
     total = counts['train'] + counts['val']
@@ -50,9 +51,9 @@ def choose_split(dataset_dir, train_split=0.8):
     if total == 0:
         return 'train'
     
-    current_train_ratio = counts['train'] / (total + 1)  # +1 für das neue Bild
+    current_train_ratio = counts['train'] / (total + 1)  # Include the new image.
     
-    # Wenn zu wenig val-Bilder -> val, sonst train
+    # Add to validation when its share is too small; otherwise use training.
     if current_train_ratio >= train_split:
         return 'val'
     else:
@@ -60,7 +61,7 @@ def choose_split(dataset_dir, train_split=0.8):
 
 
 def detect_gaps(image_path, model, conf=0.25):
-    """Erkennt Lücken mit YOLO und gibt (x1, y1, x2, y2) Boxen zurück"""
+    """Detect gaps with YOLO and return ``xyxy`` boxes."""
     results = model.predict(source=str(image_path), conf=conf, verbose=False)
     
     boxes = []
@@ -99,27 +100,27 @@ def detect_gaps(image_path, model, conf=0.25):
 
 
 def save_to_dataset(image_path, label_path, boxes, dataset_dir, split, visualize=True):
-    """Speichert Bild + Labels ins Dataset"""
+    """Save an image and its labels to a dataset split."""
     dataset_path = Path(dataset_dir)
     img_path = Path(image_path)
     
     safe_name = img_path.stem.replace(' ', '_')
     safe_ext = img_path.suffix
     
-    # Ordner sicherstellen
+    # Ensure that target directories exist.
     for folder in ['images', 'labels']:
         (dataset_path / folder / split).mkdir(parents=True, exist_ok=True)
     
-    # Bild kopieren
+    # Copy the image.
     target_image = dataset_path / 'images' / split / f"{safe_name}{safe_ext}"
     shutil.copy(str(img_path), str(target_image))
     
-    # Labels aus der temporären Datei kopieren (wurde vom Editor gespeichert)
+    # Copy labels saved by the editor from its temporary file.
     target_label = dataset_path / 'labels' / split / f"{safe_name}.txt"
     if Path(label_path).exists():
         shutil.copy(str(label_path), str(target_label))
     else:
-        # Labels aus Boxen generieren
+        # Generate labels directly from boxes.
         image = cv2.imread(str(img_path))
         img_h, img_w = image.shape[:2]
         yolo_lines = []
@@ -132,14 +133,14 @@ def save_to_dataset(image_path, label_path, boxes, dataset_dir, split, visualize
         with open(str(target_label), 'w') as f:
             f.write('\n'.join(yolo_lines))
     
-    # Visualisierung
+    # Create a visualization.
     if visualize:
         viz_dir = dataset_path / 'visualize' / split
         viz_dir.mkdir(parents=True, exist_ok=True)
         
         img = cv2.imread(str(img_path))
         
-        # Lese die Labels um die Klassen-Farben zu verwenden
+        # Read labels so each class can use its configured colour.
         class_colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 165, 255)}  # BGR
         
         with open(str(target_label), 'r') as f:
@@ -170,14 +171,15 @@ def save_to_dataset(image_path, label_path, boxes, dataset_dir, split, visualize
 
 def resolve_input_paths(inputs):
     """
-    Löst Eingaben automatisch als Datei oder Ordner auf.
-    - Datei: wird direkt übernommen
-    - Ordner: alle Bilddateien im Ordner werden übernommen (nicht rekursiv)
+    Resolve each input as a file or directory.
+
+    Files are accepted directly. Directories contribute their supported image
+    files without recursive traversal.
 
     Returns:
         (resolved_images, seen_sources)
-        resolved_images: Liste von Bildpfaden
-        seen_sources: Anzahl verarbeiteter Quell-Eingaben (Datei/Ordner)
+        resolved_images: Resolved image paths.
+        seen_sources: Number of existing file or directory inputs.
     """
     image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp', '.gif'}
     resolved_images = []
@@ -190,7 +192,7 @@ def resolve_input_paths(inputs):
 
         path = Path(cleaned)
         if not path.exists():
-            print(f"⚠️  Nicht gefunden: {cleaned}")
+            print(f"⚠️  Not found: {cleaned}")
             continue
 
         seen_sources += 1
@@ -201,62 +203,62 @@ def resolve_input_paths(inputs):
                 if f.is_file() and f.suffix.lower() in image_extensions
             ]
             if not folder_images:
-                print(f"⚠️  Keine Bilder im Ordner gefunden: {path}")
+                print(f"⚠️  No images found in directory: {path}")
             else:
                 resolved_images.extend(folder_images)
-                print(f"📁 {path.name}: {len(folder_images)} Bild(er) gefunden")
+                print(f"📁 {path.name}: {len(folder_images)} image(s) found")
         elif path.is_file():
             if path.suffix.lower() in image_extensions:
                 resolved_images.append(str(path))
             else:
-                print(f"⚠️  Kein unterstütztes Bildformat: {path}")
+                print(f"⚠️  Unsupported image format: {path}")
 
-    # Duplikate entfernen, Reihenfolge behalten
+    # Remove duplicates while retaining input order.
     resolved_images = list(dict.fromkeys(resolved_images))
     return resolved_images, seen_sources
 
 
 def add_images(image_paths):
-    """Hauptfunktion: Bilder zum Dataset hinzufügen"""
+    """Add and review a collection of images."""
     dataset_path = Path(DATASET_DIR)
     image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'}
     
     if not dataset_path.exists():
-        print(f"❌ Dataset nicht gefunden: {DATASET_DIR}")
-        print(f"💡 Führe zuerst prepare_dataset.py aus!")
+        print(f"❌ Dataset not found: {DATASET_DIR}")
+        print("💡 Run prepare_dataset.py first!")
         return
     
-    # YOLO Modell laden
+    # Load the YOLO model.
     model_path = Path(YOLO_MODEL)
     if not model_path.exists():
-        print(f"❌ YOLO Modell nicht gefunden: {YOLO_MODEL}")
+        print(f"❌ YOLO model not found: {YOLO_MODEL}")
         return
     
     model = YOLO(str(model_path))
-    print(f"🤖 YOLO Modell geladen: {YOLO_MODEL}")
+    print(f"🤖 YOLO model loaded: {YOLO_MODEL}")
     
-    # Aktuelle Dataset-Statistik
+    # Show current dataset statistics.
     counts = count_dataset_images(DATASET_DIR)
-    print(f"📊 Aktuelles Dataset: {counts['train']} train / {counts['val']} val")
+    print(f"📊 Current dataset: {counts['train']} train / {counts['val']} val")
     
-    # Pfade bereinigen und validieren
+    # Clean and validate input paths.
     cleaned_paths = []
     for p in image_paths:
-        # PowerShell-Symbols entfernen
+        # Remove PowerShell call operators and surrounding quotes.
         cleaned = str(p).lstrip('&').strip().strip('"').strip("'")
         if cleaned:
             cleaned_paths.append(cleaned)
     
-    # Bilder filtern
+    # Filter images.
     valid_images = []
     for p in cleaned_paths:
         path = Path(p)
         if not path.exists():
-            print(f"⚠️  Nicht gefunden: {p}")
+            print(f"⚠️  Not found: {p}")
         elif path.suffix.lower() not in image_extensions:
-            print(f"⚠️  Kein unterstütztes Bildformat: {p}")
+            print(f"⚠️  Unsupported image format: {p}")
         else:
-            # Prüfen ob schon im Dataset
+            # Check whether the image is already in the dataset.
             safe_name = path.stem.replace(' ', '_')
             already_exists = False
             for split in ['train', 'val']:
@@ -265,25 +267,25 @@ def add_images(image_paths):
                         already_exists = True
                         break
             if already_exists:
-                print(f"⚠️  Bereits im Dataset: {path.name}")
+                print(f"⚠️  Already in the dataset: {path.name}")
             else:
                 valid_images.append(path)
     
     if not valid_images:
-        print("❌ Keine neuen Bilder zum Hinzufügen!")
+        print("❌ No new images to add!")
         return
     
-    print(f"\n📁 {len(valid_images)} neue Bilder werden verarbeitet")
-    print(f"\n🎮 Steuerung im Editor:")
-    print(f"   L-Ziehen    = Neue Box zeichnen")
-    print(f"   Rechtsklick = Box löschen")
-    print(f"   Z           = Undo")
-    print(f"   S           = Speichern")
-    print(f"   N / Space   = Übernehmen & weiter")
-    print(f"   D           = Bild überspringen (nicht hinzufügen)")
-    print(f"   Q / ESC     = Abbrechen\n")
+    print(f"\n📁 Processing {len(valid_images)} new image(s)")
+    print("\n🎮 Editor controls:")
+    print("   Left drag   = Draw a new box")
+    print("   Right click = Delete a box")
+    print("   Z           = Undo")
+    print("   S           = Save")
+    print("   N / Space   = Accept and continue")
+    print("   D           = Skip image without adding it")
+    print("   Q / ESC     = Cancel\n")
     
-    # Temporärer Ordner für Labels
+    # Temporary label directory.
     tmp_dir = Path("_tmp_add_labels")
     tmp_dir.mkdir(exist_ok=True)
     
@@ -296,15 +298,15 @@ def add_images(image_paths):
             img_path = valid_images[idx]
             print(f"\n── [{idx + 1}/{len(valid_images)}] {img_path.name} ──")
             
-            # Boxen erkennen
+            # Detect boxes.
             boxes = detect_gaps(str(img_path), model, conf=YOLO_CONF)
-            print(f"🔍 {len(boxes)} Boxen erkannt")
+            print(f"🔍 {len(boxes)} boxes detected")
             
-            # Temporäre Label-Datei erstellen
+            # Create a temporary label file.
             tmp_label = tmp_dir / f"{img_path.stem}.txt"
             image = cv2.imread(str(img_path))
             if image is None:
-                print(f"❌ Fehler beim Laden: {img_path}")
+                print(f"❌ Failed to load image: {img_path}")
                 idx += 1
                 skipped += 1
                 continue
@@ -320,7 +322,7 @@ def add_images(image_paths):
             with open(str(tmp_label), 'w') as f:
                 f.write('\n'.join(yolo_lines))
             
-            # Editor öffnen
+            # Open the editor.
             editor = BoxEditor(
                 image_path=img_path,
                 label_path=tmp_label,
@@ -333,20 +335,20 @@ def add_images(image_paths):
             action = editor.run()
             
             if action == 'quit':
-                print("⏹️  Abgebrochen")
+                print("⏹️  Cancelled")
                 break
             elif action == 'delete':
-                # Bild überspringen
-                print(f"⏭️  Übersprungen: {img_path.name}")
+                # Skip the image.
+                print(f"⏭️  Skipped: {img_path.name}")
                 skipped += 1
                 idx += 1
             elif action == 'prev':
                 idx = max(0, idx - 1)
             else:  # 'next'
-                # Ins Dataset einfügen
+                # Add the image to the dataset.
                 split = choose_split(DATASET_DIR, TRAIN_SPLIT)
                 
-                # Boxen aus der (möglicherweise editierten) Label-Datei lesen
+                # Read boxes from the potentially edited label file.
                 final_boxes = []
                 if tmp_label.exists():
                     with open(str(tmp_label), 'r') as f:
@@ -367,41 +369,47 @@ def add_images(image_paths):
                 )
                 
                 added += 1
-                print(f"✅ Hinzugefügt zu {split}: {img_path.name} ({len(final_boxes)} Boxen)")
+                print(
+                    f"✅ Added to {split}: {img_path.name} "
+                    f"({len(final_boxes)} boxes)"
+                )
                 idx += 1
     
     finally:
-        # Temporäre Dateien aufräumen
+        # Remove temporary files.
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
         cv2.destroyAllWindows()
     
-    # Zusammenfassung
+    # Summary.
     counts_after = count_dataset_images(DATASET_DIR)
     print(f"\n{'='*50}")
-    print(f"✅ Fertig!")
-    print(f"   Hinzugefügt: {added}")
-    print(f"   Übersprungen: {skipped}")
-    print(f"   Dataset jetzt: {counts_after['train']} train / {counts_after['val']} val")
+    print("✅ Finished!")
+    print(f"   Added: {added}")
+    print(f"   Skipped: {skipped}")
+    print(
+        f"   Dataset now: {counts_after['train']} train / "
+        f"{counts_after['val']} val"
+    )
     total = counts_after['train'] + counts_after['val']
     if total > 0:
         ratio = counts_after['train'] / total * 100
-        print(f"   Train-Anteil: {ratio:.0f}%")
+        print(f"   Training share: {ratio:.0f}%")
 
 
 def main():
     import sys
     
     if len(sys.argv) > 1:
-        # Dateien oder Ordner als Argumente
+        # Accept files or directories as command-line arguments.
         image_paths, source_count = resolve_input_paths(sys.argv[1:])
         if source_count == 0:
-            print("❌ Keine gültigen Eingaben gefunden!")
+            print("❌ No valid inputs found!")
             return
     else:
-        print("📷 Bilder zum Dataset hinzufügen")
-        print("   Gib Datei- oder Ordnerpfade ein (einer pro Zeile, leer = fertig).")
-        print("   Ordner werden automatisch erkannt und deren Bilder geladen.\n")
+        print("📷 Add images to the dataset")
+        print("   Enter file or directory paths, one per line.")
+        print("   Submit an empty line to finish; directories are detected automatically.\n")
 
         raw_inputs = []
         while True:
@@ -411,18 +419,18 @@ def main():
             raw_inputs.append(raw_input)
 
         if not raw_inputs:
-            print("❌ Keine Eingaben angegeben!")
+            print("❌ No inputs provided!")
             return
 
         image_paths, source_count = resolve_input_paths(raw_inputs)
         if source_count == 0:
-            print("❌ Keine gültigen Eingaben gefunden!")
+            print("❌ No valid inputs found!")
             return
 
-        print(f"\n✓ {len(image_paths)} Bild(er) insgesamt übernommen\n")
+        print(f"\n✓ Accepted {len(image_paths)} image(s) in total\n")
 
     if not image_paths:
-        print("❌ Keine neuen Bilder zum Hinzufügen!")
+        print("❌ No new images to add!")
         return
     
     add_images(image_paths)

@@ -5,7 +5,7 @@ import numpy as np
 
 def calculate_iou(box1, box2):
     """
-    Berechnet Intersection over Union (IoU) zwischen zwei Boxen
+    Calculate the intersection over union (IoU) of two boxes.
     box: [x1, y1, x2, y2]
     """
     x1_inter = max(box1[0], box2[0])
@@ -28,43 +28,43 @@ def calculate_iou(box1, box2):
 
 def filter_overlapping_boxes(boxes, iou_threshold=0.5):
     """
-    Filtert überlappende Boxen - behält nur die mit höchster Confidence
+    Filter overlapping boxes, keeping only the highest-confidence box.
     
     Args:
-        boxes: YOLO boxes Objekt
-        iou_threshold: Mindest-IoU für Überlappung (0.5 = 50%)
+        boxes: YOLO boxes object.
+        iou_threshold: Minimum IoU considered an overlap (0.5 = 50%).
     
     Returns:
-        Liste von Indizes der zu behaltenden Boxen
+        List of indices for the boxes to keep.
     """
     if len(boxes) == 0:
         return []
     
-    # Extrahiere Koordinaten und Confidences
+    # Extract coordinates and confidence scores.
     coords = boxes.xyxy.cpu().numpy()  # [x1, y1, x2, y2]
     confidences = boxes.conf.cpu().numpy()
     
-    # Nach Confidence sortieren (höchste zuerst)
+    # Sort by confidence (highest first).
     sorted_indices = np.argsort(-confidences)
     
     keep = []
     
     for i in sorted_indices:
-        # Prüfe ob diese Box mit bereits behaltenen überlappt
+        # Check whether this box overlaps a box that has already been kept.
         should_keep = True
         
         for kept_idx in keep:
             iou = calculate_iou(coords[i], coords[kept_idx])
             
             if iou > iou_threshold:
-                # Überlappung gefunden - verwerfe diese Box (niedrigere Confidence)
+                # Discard this box because it has the lower confidence score.
                 should_keep = False
                 break
         
         if should_keep:
             keep.append(i)
     
-    return sorted(keep)  # Zurück in ursprünglicher Reihenfolge
+    return sorted(keep)  # Restore the original order.
 
 
 def is_line_class(class_name):
@@ -137,27 +137,27 @@ def sort_units_reading_order(units, gaps):
 
 def group_gaps_by_proximity(gaps):
     """
-    Gruppiert Boxen, die direkt untereinander liegen.
+    Group boxes that are positioned directly below one another.
     
     Args:
-        gaps: Liste von Gap-Boxen als Tuples (x1, y1, x2, y2)
+        gaps: List of gap boxes as (x1, y1, x2, y2) tuples.
     
     Returns:
-        groups: Liste von Gruppen, wobei jede Gruppe eine Liste von Gap-Indizes (in Original-Reihenfolge) ist
-        gap_to_group: Mapping von Gap-Index zu Gruppen-Index
+        groups: Groups containing gap indices in their original order.
+        gap_to_group: Mapping from each gap index to its group index.
     """
     if not gaps:
         return [], {}
     
-    # Erstelle Index-Mapping: sorted_idx -> original_idx
+    # Create an index mapping from sorted indices to original indices.
     indices = list(range(len(gaps)))
-    sorted_indices = sorted(indices, key=lambda i: gaps[i][1])  # Sortiere nach Y (oben nach unten)
+    sorted_indices = sorted(indices, key=lambda i: gaps[i][1])  # Top to bottom.
     
-    # Berechne durchschnittliche Gap-Höhe als Schwellenwert
+    # Use the average gap height to derive the distance threshold.
     heights = [(gap[3] - gap[1]) for gap in gaps]
     avg_height = sum(heights) / len(heights) if heights else 0
     
-    # Abstands-Schwelle: line-Boxen dürfen leicht überlappen oder knapp auseinanderliegen
+    # Line boxes may overlap slightly or have a small vertical gap.
     distance_threshold = avg_height * 1.5
     overlap_tolerance = max(5, int(avg_height * 0.15))
     
@@ -165,7 +165,7 @@ def group_gaps_by_proximity(gaps):
     gap_to_group = {}
     grouped = set()
     
-    # Verarbeite Gaps von oben nach unten
+    # Process gaps from top to bottom.
     for sort_i, i in enumerate(sorted_indices):
         if i in grouped:
             continue
@@ -174,15 +174,15 @@ def group_gaps_by_proximity(gaps):
         x1_i, y1_i, x2_i, y2_i = gap_i[:4]
         class_name_i = gap_i[4] if len(gap_i) > 4 else "line"
         
-        # Nur echte line-Boxen werden gruppiert. Andere Klassen werden ignoriert.
+        # Only exact line-class detections are grouped.
         if not is_line_class(class_name_i):
             continue
 
-        # Starte neue Gruppe mit aktuellem line-Gap
+        # Start a new group with the current line gap.
         current_group = [i]
         grouped.add(i)
         
-        # Suche nach Gaps unterhalb dieses Gaps
+        # Search for gaps below the current gap.
         for sort_j in range(sort_i + 1, len(sorted_indices)):
             j = sorted_indices[sort_j]
             
@@ -197,39 +197,39 @@ def group_gaps_by_proximity(gaps):
             if not is_line_class(class_name_j):
                 continue
             
-            # Prüfe vertikalen Abstand (Box j darf knapp überlappen oder knapp unter Box i sein)
+            # Box j may overlap slightly or sit just below box i.
             vertical_distance = y1_j - y2_i
             
-            # Prüfe horizontale Ausrichtung
+            # Check horizontal alignment.
             i_left, i_top, i_right, i_bottom = x1_i, y1_i, x2_i, y2_i
             j_left, j_top, j_right, j_bottom = x1_j, y1_j, x2_j, y2_j
             
-            # Berechne horizontale Überlappung
+            # Calculate horizontal overlap.
             h_overlap_start = max(i_left, j_left)
             h_overlap_end = min(i_right, j_right)
             h_overlap = max(0, h_overlap_end - h_overlap_start)
             
-            # Breiten der Boxen
+            # Box widths.
             i_width = i_right - i_left
             j_width = j_right - j_left
             min_width = min(i_width, j_width)
             
-            # Prüfe ob Box j vertikal zur gleichen Gruppe gehört und horizontal ausgerichtet ist
+            # Check whether box j belongs to the same vertical group and is aligned.
             if -overlap_tolerance <= vertical_distance < distance_threshold:
-                # Mindestens 30% Überlappung oder visuell nebeneinander
+                # Require at least 30% overlap or a minimum visible overlap.
                 if h_overlap > min_width * 0.3 or h_overlap > 15:  # 15px min overlap
                     current_group.append(j)
                     grouped.add(j)
-                    gap_i = gap_j  # Update für nächste Iteration
+                    gap_i = gap_j  # Use this gap in the next iteration.
                     x1_i, y1_i, x2_i, y2_i = gap_i[:4]
                 else:
-                    # Wenn nicht genug Überlappung, beende diese Gruppe
+                    # End the group if the boxes do not overlap enough.
                     break
             else:
-                # Wenn Abstand zu groß, beende diese Gruppe
+                # End the group if the vertical distance is too large.
                 break
         
-        # Speichere Gruppe (sortiere Indizes in Reihenfolge der Rückkehr)
+        # Store the group with indices in their original order.
         current_group.sort()
         for idx in current_group:
             gap_to_group[idx] = len(groups)
@@ -238,46 +238,46 @@ def group_gaps_by_proximity(gaps):
     
     return groups, gap_to_group
 
-# Trainiertes Modell laden
+# Load the trained model.
 MODEL_PATH = "./model/v1.2.1/gap_detection_model.pt"
 
-# Prüfe ob trainiertes Modell existiert
+# Verify that the trained model exists.
 if not Path(MODEL_PATH).exists():
-    print(f"❌ Trainiertes Modell nicht gefunden: {MODEL_PATH}")
-    print(f"💡 Führe zuerst train_yolo.py aus!")
-    print(f"\nFalls vorhanden, ändere MODEL_PATH zur korrekten Position")
+    print(f"❌ Trained model not found: {MODEL_PATH}")
+    print("💡 Run train_yolo.py first!")
+    print("\nIf the model exists elsewhere, update MODEL_PATH accordingly.")
     exit()
 
-print(f"✅ Lade trainiertes Modell: {MODEL_PATH}\n")
+print(f"✅ Loading trained model: {MODEL_PATH}\n")
 model = YOLO(MODEL_PATH)
 
-# Bild zum Testen
+# Image to test.
 IMAGE_PATH = 'test.jpg'
 results = model.predict(source=IMAGE_PATH, save=True, conf=0.25)
 
-# Ergebnisse durchgehen
+# Process the results.
 for r in results:
-    print(f"📸 Bild: {r.path}")
+    print(f"📸 Image: {r.path}")
     print(f"⚡ Speed: {r.speed}")
-    print(f"📦 Anzahl Detektionen (vor Filterung): {len(r.boxes)}")
+    print(f"📦 Detections before filtering: {len(r.boxes)}")
     
-    # Überlappende Boxen filtern
+    # Filter overlapping boxes.
     if len(r.boxes) > 0:
         keep_indices = filter_overlapping_boxes(r.boxes, iou_threshold=0.5)
-        print(f"🔍 Nach Überlappungs-Filterung: {len(keep_indices)} Boxen")
+        print(f"🔍 Boxes after overlap filtering: {len(keep_indices)}")
     else:
         keep_indices = []
     
     if len(keep_indices) == 0:
-        print("\n❌ Keine freien Stellen erkannt!")
-        print("💡 Überprüfe:")
-        print("   - Ist das Bild ein Arbeitsblatt?")
-        print("   - Wurde das Modell richtig trainiert?")
-        print("   - Versuche niedrigere conf (z.B. 0.1)")
+        print("\n❌ No writable areas detected!")
+        print("💡 Check the following:")
+        print("   - Is the image a worksheet?")
+        print("   - Was the model trained correctly?")
+        print("   - Try a lower confidence threshold (for example, 0.1).")
     else:
-        # Extrahiere Gap-Boxen aus den gefilterten Indizes
+        # Extract gap boxes from the filtered indices.
         gaps = []
-        gap_info = []  # Speichert Box-Info für spätere Referenz
+        gap_info = []  # Keep box information for later reference.
         
         for idx in keep_indices:
             box = r.boxes[idx]
@@ -291,7 +291,7 @@ for r in results:
                 'confidence': float(box.conf[0])
             })
         
-        # Gruppiere line-Boxen und baue globale Antwort-Einheiten
+        # Group line boxes and build globally ordered answer units.
         groups, gap_to_group = group_gaps_by_proximity(gaps)
         grouped_indices = set(gap_to_group.keys())
         ungrouped_indices = [i for i in range(len(gaps)) if i not in grouped_indices]
@@ -303,48 +303,48 @@ for r in results:
             for gap_idx in unit:
                 gap_to_unit[gap_idx] = unit_idx
 
-        print(f"\n✅ Gefundene freie Stellen (nach Filterung): {len(gaps)} Stellen")
-        print(f"📊 Line-Boxen gruppiert in {len(groups)} Gruppen")
-        print(f"📌 Nicht gruppierte Boxen (z.B. gap): {len(ungrouped_indices)}\n")
-        print(f"🔢 Antwort-Einheiten (global nummeriert): {len(answer_units)}\n")
+        print(f"\n✅ Writable areas after filtering: {len(gaps)}")
+        print(f"📊 Line boxes grouped into {len(groups)} groups")
+        print(f"📌 Ungrouped boxes (for example, gap): {len(ungrouped_indices)}\n")
+        print(f"🔢 Globally numbered answer units: {len(answer_units)}\n")
         
-        # Zeige nur line-Gruppen
+        # Display answer units.
         for unit_idx, unit in enumerate(answer_units):
-            print(f"📍 Einheit {unit_idx + 1}: {len(unit)} Stelle(n)")
+            print(f"📍 Unit {unit_idx + 1}: {len(unit)} area(s)")
 
             for pos_in_group, gap_idx in enumerate(unit):
                 box = gap_info[gap_idx]
                 gap = gaps[gap_idx]
                 x1, y1, x2, y2 = gap[:4]
                 
-                print(f"   Stelle {pos_in_group + 1}:")
-                print(f"     Klasse: {r.names[box['class_id']]}")
-                print(f"     Konfidenz: {box['confidence']:.2%}")
+                print(f"   Area {pos_in_group + 1}:")
+                print(f"     Class: {r.names[box['class_id']]}")
+                print(f"     Confidence: {box['confidence']:.2%}")
                 print(f"     Box: ({x1}, {y1}) → ({x2}, {y2})")
-                print(f"     Größe: {x2-x1} x {y2-y1} px")
+                print(f"     Size: {x2-x1} x {y2-y1} px")
 
-        # Zeige ungruppierte (gap etc.) separat
+        # Display ungrouped boxes separately.
         if ungrouped_indices:
-            print("\n🧩 Ungruppierte Boxen:")
+            print("\n🧩 Ungrouped boxes:")
             for idx in ungrouped_indices:
                 box = gap_info[idx]
                 x1, y1, x2, y2 = gaps[idx][:4]
                 unit_num = gap_to_unit.get(idx, -1) + 1
-                print(f"   - Nr {unit_num} | Klasse: {r.names[box['class_id']]} | Konfidenz: {box['confidence']:.2%} | Box: ({x1}, {y1}) → ({x2}, {y2})")
+                print(f"   - No. {unit_num} | Class: {r.names[box['class_id']]} | Confidence: {box['confidence']:.2%} | Box: ({x1}, {y1}) → ({x2}, {y2})")
     
-    # Bild mit markierten freien Stellen anzeigen (nur gefilterte)
-    print(f"\n🎨 Zeige Ergebnis...")
+    # Display the image with filtered writable areas marked.
+    print("\n🎨 Displaying result...")
     
     if len(keep_indices) > 0:
-        # Zeichne eine Sammelbox pro Antwort-Einheit
+        # Draw one combined box per answer unit.
         img = r.orig_img.copy()
         for unit_idx, unit in enumerate(answer_units):
             x1, y1, x2, y2 = unit_bbox(unit, gaps)
 
-            # Box zeichnen
+            # Draw the box.
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
-            # Reine Zahlenlabel
+            # Use a numeric label only.
             label = str(unit_idx + 1)
             label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
             cv2.rectangle(img, (x1, y1 - label_size[1] - 4), (x1 + label_size[0] + 2, y1), (255, 0, 0), -1)
@@ -354,15 +354,15 @@ for r in results:
     else:
         annotated = r.orig_img.copy()
     
-    # Speichern
+    # Save the result.
     output_path = 'yolo_detected_gaps.png'
     cv2.imwrite(output_path, annotated)
-    print(f"💾 Gespeichert: {output_path}")
+    print(f"💾 Saved: {output_path}")
     
-    # Anzeigen
-    cv2.imshow('YOLO - Freie Stellen Erkennung', annotated)
-    print("👁️  Drücke eine Taste um zu schließen...")
+    # Display the result.
+    cv2.imshow('YOLO - Writable Area Detection', annotated)
+    print("👁️  Press any key to close...")
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
-print("\n✅ Fertig!")
+print("\n✅ Finished!")

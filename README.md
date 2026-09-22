@@ -338,12 +338,12 @@ Current defaults in `train_yolo.py`:
 | Image size | `640` |
 | Batch size | `16` |
 | Device | GPU `0` |
-| Output | `arbeitsblatt_yolo/transfer_learning/` |
+| Output | `worksheet_yolo/transfer_learning/` |
 
 Adjust batch size, image size, device, and training duration for the available hardware and dataset size. The best checkpoint is written to:
 
 ```text
-arbeitsblatt_yolo/transfer_learning/weights/best.pt
+worksheet_yolo/transfer_learning/weights/best.pt
 ```
 
 ### 4. Evaluate or Export
