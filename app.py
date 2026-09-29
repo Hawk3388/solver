@@ -1,18 +1,22 @@
-import warnings
-warnings.filterwarnings('ignore')
-from main import WorksheetSolver, solve_batch
-import os
-import sys
 import base64
-import tempfile
-from flask import Flask, render_template, request, jsonify
-from waitress import serve
-import socket
+import io
+import os
 from pathlib import Path
+import socket
+import sys
+import tempfile
+import warnings
+import zipfile
+
+warnings.filterwarnings('ignore')
+
+from flask import Flask, render_template, request, jsonify
+from main import WorksheetSolver, solve_batch
 from worksheet_solver.images import (
     ImageNormalizationError,
     validate_image_file,
 )
+from waitress import serve
 
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
@@ -24,6 +28,8 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 MAX_BATCH_FILES = 10
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE * MAX_BATCH_FILES
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
+AUTO_ROTATE_PAGE = True
+CORRECT_PERSPECTIVE = True
 
 print('Loading shared gap detection model...')
 DETECTION_RUNTIME = WorksheetSolver.preload_detection_model()
@@ -71,12 +77,6 @@ def solve():
         thinking_budget = max(0, min(thinking_budget, 32768))
         debug = request.form.get('debug', 'false') == 'true'
         experimental = request.form.get('experimental', 'false') == 'true'
-        auto_rotate_page = (
-            request.form.get('auto_rotate_page', 'false') == 'true'
-        )
-        correct_perspective = (
-            request.form.get('correct_perspective', 'false') == 'true'
-        )
         if experimental and not local:
             return jsonify({
                 'error': 'Experimental mode requires Local Mode.'
@@ -137,14 +137,15 @@ def solve():
                 'thinking_budget': thinking_budget,
                 'debug': debug,
                 'experimental': experimental,
-                'auto_rotate_page': auto_rotate_page,
-                'correct_perspective': correct_perspective,
+                'auto_rotate_page': AUTO_ROTATE_PAGE,
+                'correct_perspective': CORRECT_PERSPECTIVE,
                 'detection_runtime': DETECTION_RUNTIME,
             },
             solver_class=WorksheetSolver,
         )
 
         images = []
+        archive_files = []
         used_download_names = set()
         for result in batch_results:
             original_name = original_names[result.source_path]
@@ -156,7 +157,8 @@ def solve():
                 continue
 
             with open(result.output_path, 'rb') as solved_file:
-                image_data = base64.b64encode(solved_file.read()).decode('utf-8')
+                solved_image = solved_file.read()
+            image_data = base64.b64encode(solved_image).decode('utf-8')
             base_name = f'{Path(original_name).stem}_solved'
             download_name = f'{base_name}.png'
             suffix = 2
@@ -168,6 +170,7 @@ def solve():
                 'filename': download_name,
                 'image': image_data,
             })
+            archive_files.append((download_name, solved_image))
 
         if not images:
             return jsonify({
@@ -175,9 +178,25 @@ def solve():
                 'errors': errors,
             }), 422
 
-        response = {'images': images, 'errors': errors}
+        response = {
+            'images': images,
+            'errors': errors,
+        }
         if len(images) == 1:
             response['image'] = images[0]['image']
+        else:
+            archive_buffer = io.BytesIO()
+            with zipfile.ZipFile(
+                archive_buffer,
+                mode='w',
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                for filename, image_bytes in archive_files:
+                    archive.writestr(filename, image_bytes)
+            response['archive'] = base64.b64encode(
+                archive_buffer.getvalue()
+            ).decode('ascii')
+            response['archive_filename'] = 'worksheet_solutions.zip'
         return jsonify(response), 207 if errors else 200
 
     except Exception as e:

@@ -132,7 +132,7 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and:
 1. Select one or more worksheet images.
 2. Open the settings panel if you need to change the model or backend.
 3. Click **Solve**.
-4. Review and download each completed PNG.
+4. Review the completed worksheets. A single result is downloaded directly as a PNG; multiple results are bundled into a ZIP archive. Click any image to open a large preview with an individual download option.
 
 Available settings:
 
@@ -142,14 +142,12 @@ Available settings:
 | Local Mode | Uses Ollama instead of Gemini |
 | Thinking | Enables model reasoning when supported |
 | Thinking Budget | Maximum reasoning budget sent to supported backends |
-| Auto-Rotate Page | Optionally rotates landscape photos to portrait orientation |
-| Correct Perspective | Optionally straightens a clearly detected photographed page boundary |
 | Debug Mode | Prints timing information and model diagnostics |
 | Experimental Mode | Uses the optional local Transformers pipeline; requires Local Mode |
 
 The web interface accepts up to 10 images per batch. Each image is limited to 10 MB and the complete request to 100 MB. The image header is also checked before decoding: sources above 40 million pixels or with an aspect ratio above 6:1 are rejected, preventing highly compressed oversized images from bypassing the byte limit. Files are processed sequentially to keep detector and language-model memory usage predictable. If one worksheet fails, the successful results remain available and the failed filename is reported.
 
-Before detection, every accepted image is EXIF-oriented, flattened onto a white background when it has transparency, converted to RGB, and written as a normalized PNG. Images above 16 million output pixels are proportionally downscaled. Perspective correction and landscape-to-portrait rotation are deliberately opt-in because automatic geometry changes can be wrong for genuine landscape worksheets.
+Before detection, every accepted image is EXIF-oriented, flattened onto a white background when it has transparency, converted to RGB, and written as a normalized PNG. Images above 16 million output pixels are proportionally downscaled. Conservative perspective correction and landscape-to-portrait rotation are enabled by default throughout the solver and are always applied by the web application.
 
 The YOLO detector is loaded once when the server process starts and is reused by every request and every file in a batch. A process-wide lock serializes detector inference because the shared model is not assumed to be thread-safe; OCR and language-model work can continue independently after detection. Deployments with multiple worker processes load one detector per worker process.
 
@@ -234,8 +232,8 @@ Constructor options:
 | `experimental` | `False` | Use the optional local Transformers backend |
 | `detection_runtime` | `None` | Optional preloaded runtime; otherwise the process-wide detector cache is used |
 | `max_output_pixels` | `16000000` | Proportionally downscale normalized images above this pixel count |
-| `auto_rotate_page` | `False` | Rotate landscape images 90° to portrait orientation |
-| `correct_perspective` | `False` | Apply conservative four-corner page rectification when a page boundary is found |
+| `auto_rotate_page` | `True` | Rotate landscape images 90° to portrait orientation |
+| `correct_perspective` | `True` | Apply conservative four-corner page rectification when a page boundary is found |
 
 ## Project Architecture
 

@@ -39,8 +39,8 @@ class WorksheetSolver(DetectionMixin, SolvingMixin, RenderingMixin):
         experimental: bool = False,
         detection_runtime: DetectionModelRuntime | None = None,
         max_output_pixels: int = MAX_OUTPUT_PIXELS,
-        auto_rotate_page: bool = False,
-        correct_perspective: bool = False,
+        auto_rotate_page: bool = True,
+        correct_perspective: bool = True,
     ):
         self.debug = debug
         self.model_name = llm_model_name

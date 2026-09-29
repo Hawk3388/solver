@@ -161,8 +161,8 @@ def normalize_worksheet_image(
     destination_path: str | Path,
     *,
     max_output_pixels: int = MAX_OUTPUT_PIXELS,
-    auto_rotate_page: bool = False,
-    correct_perspective: bool = False,
+    auto_rotate_page: bool = True,
+    correct_perspective: bool = True,
 ) -> Path:
     """Normalize a worksheet to an oriented, opaque, bounded RGB PNG."""
     if max_output_pixels <= 0 or max_output_pixels > MAX_SOURCE_PIXELS:
