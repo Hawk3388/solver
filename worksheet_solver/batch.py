@@ -15,6 +15,7 @@ class BatchResult:
     source_path: Path
     output_path: Path | None = None
     error: str | None = None
+    warnings: tuple[str, ...] = ()
 
     @property
     def success(self) -> bool:
@@ -129,7 +130,10 @@ def solve_batch(
                 close = getattr(solver, "close", None)
                 if close is not None:
                     close()
-            results.append(BatchResult(source_path, output_path=output_path))
+            warnings = tuple(getattr(solver, "answer_warnings", [])) + tuple(
+                entry["message"] for entry in getattr(solver, "render_warnings", [])
+            )
+            results.append(BatchResult(source_path, output_path=output_path, warnings=warnings))
         except Exception as error:
             results.append(BatchResult(source_path, error=str(error)))
             if not continue_on_error:

@@ -18,3 +18,5 @@ solver/
 *.zip
 gradio/
 .gradio/
+feedback/
+.venv/

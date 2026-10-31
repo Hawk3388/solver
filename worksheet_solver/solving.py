@@ -1,14 +1,19 @@
 """OCR, multimodal model calls, and structured solution mapping."""
 
+from contextlib import contextmanager
 from pathlib import Path
+import time
 
 import cv2
 from google import genai
 from google.genai import types
 import ollama
+import httpx
 from PIL import Image
 
 from .schemas import get_solution
+from .answers import inspect_answers
+from .config import DEFAULT_CLOUD_MODEL, REQUEST_TIMEOUT_SECONDS, OLLAMA_MAX_SECONDS
 
 
 class SolvingMixin:
@@ -86,15 +91,13 @@ Return only this JSON format:
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_json_schema=get_solution.model_json_schema(),
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=(
-                                self.thinking_budget if self.think else 0
-                            )
+                        thinking_config=(
+                            None if self.think else types.ThinkingConfig(thinking_budget=0)
                         ),
                     ),
                 )
             except genai.errors.ServerError:
-                fallback_model = "gemini-3-flash-preview"
+                fallback_model = DEFAULT_CLOUD_MODEL
                 if self.model_name == fallback_model:
                     raise
                 print(
@@ -107,82 +110,17 @@ Return only this JSON format:
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_json_schema=get_solution.model_json_schema(),
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=(
-                                self.thinking_budget if self.think else 0
-                            )
+                        thinking_config=(
+                            None if self.think else types.ThinkingConfig(thinking_budget=0)
                         ),
                     ),
                 )
         return get_solution.model_validate_json(response.text)
 
-    def _solve_with_streaming_ollama(self, marked_image_path, prompt):
-        """Handle the legacy Qwen thinking/instruct fallback flow."""
-        print(
-            "you are using an experimantal thinking model - we will stream "
-            "the response and switch to an instruct model if it seems to get "
-            "stuck in thinking mode"
-        )
-        response = ollama.chat(
-            model=self.model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [marked_image_path, self.path],
-                }
-            ],
-            format=get_solution.model_json_schema(),
-            options={"num_ctx": 8192},
-            stream=True,
-        )
-        full_response = ""
-        thinking = ""
-        finished = True
-
-        for chunk in response:
-            if chunk.message.content:
-                full_response += chunk.message.content
-                print(chunk.message.content, end="", flush=True)
-            elif chunk.message.thinking:
-                print(chunk.message.thinking, end="", flush=True)
-                thinking += chunk.message.thinking
-                if len(thinking) > 12000 and "\n\n" in thinking.strip()[-10:]:
-                    thinking = thinking.split("\n\n")[0]
-                    del response
-                    print(len(thinking))
-                    finished = False
-                    break
-
-        if finished:
-            return get_solution.model_validate_json(full_response), thinking
-
-        final_response = ollama.chat(
-            model=self.model_name.replace("thinking", "instruct"),
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [marked_image_path, self.path],
-                },
-                {"role": "assistant", "content": thinking},
-            ],
-            format=get_solution.model_json_schema(),
-            options={"num_ctx": 8192},
-        )
-        return (
-            get_solution.model_validate_json(final_response.message.content),
-            thinking,
-        )
-
     def _solve_with_ollama(self, marked_image_path, prompt, start_time):
         """Request structured solutions from a local Ollama model."""
-        if self.model_name == "qwen3-vl:8b-thinking" and self.think:
-            return self._solve_with_streaming_ollama(marked_image_path, prompt)
-
-        capabilities = ollama.show(self.model_name).capabilities
-        response = ollama.chat(
-            model=self.model_name,
+        capabilities = self._ollama_capabilities()
+        content, thinking = self._chat_with_ollama(
             messages=[
                 {
                     "role": "user",
@@ -190,50 +128,29 @@ Return only this JSON format:
                     "images": [marked_image_path, self.path],
                 }
             ],
-            format=get_solution.model_json_schema(),
+            response_format=get_solution.model_json_schema(),
             think=(
                 None
                 if "thinking" not in capabilities
                 else bool(self.think)
             ),
             options={"num_ctx": 8192, "temperature": 0.1},
+            phase="Solving exercises",
         )
 
-        thinking = getattr(response.message, "thinking", None)
-        if thinking:
-            print(thinking)
         try:
-            output = get_solution.model_validate_json(response.message.content)
+            output = get_solution.model_validate_json(content)
         except Exception as error:
             if self.debug:
                 if thinking:
                     print(f"Thinking content:\n{thinking}")
-                print(f"Full response content:\n{response.message.content}")
+                print(f"Full response content:\n{content}")
                 print("Debug mode ON - timing enabled")
                 print(f"Time taken: {self.time.time() - start_time:.2f} seconds")
             raise ValueError(
                 f"The AI returned an invalid response: {error}"
             ) from error
         return output, thinking
-
-    def _solve_with_experimental_pipeline(self, marked_image_path, prompt):
-        """Request solutions from the optional Transformers pipeline."""
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image_path": marked_image_path},
-                    {"type": "image", "image_path": self.path},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
-        response = self.pipe(
-            messages,
-            enable_thinking=self.think,
-            prefix_allowed_tokens_fn=self.prefix_function,
-        )[0]["generated_text"][-1]["content"]
-        return get_solution.model_validate_json(response.split("</think>")[-1])
 
     def ask_ai_about_all_gaps(self, marked_image):
         """Ask the configured multimodal model about every answer unit."""
@@ -250,14 +167,18 @@ Return only this JSON format:
             )
 
         ocr_text = self.ocr_image(self.path)
-        prompt = self._build_solution_prompt(ocr_text)
+        self._solution_prompt = self._build_solution_prompt(ocr_text)
+        output = self._request_solutions(str(marked_image_path), self._solution_prompt)
+        if self.debug:
+            print(f"Time taken: {self.time.time() - start_time:.2f} seconds")
+        return output
 
-        if self.experimental:
-            output = self._solve_with_experimental_pipeline(
-                str(marked_image_path),
-                prompt,
-            )
-        elif self.local:
+    def _request_solutions(self, marked_image_path, prompt):
+        """Reuse the selected backend for a bounded answer-repair request."""
+        start_time = self.time.time() if self.debug else None
+        thinking = None
+
+        if self.local:
             output, thinking = self._solve_with_ollama(
                 str(marked_image_path),
                 prompt,
@@ -291,8 +212,7 @@ Return only the OCR text.
 """
 
         if self.local:
-            response = ollama.chat(
-                model=self.model_name,
+            content, _thinking = self._chat_with_ollama(
                 messages=[
                     {
                         "role": "user",
@@ -302,8 +222,9 @@ Return only the OCR text.
                 ],
                 think=False,
                 options={"temperature": 0.1},
+                phase="Reading worksheet",
             )
-            return response.message.content
+            return content
 
         with Image.open(image_path) as image:
             response = self.client.models.generate_content(
@@ -330,19 +251,137 @@ Return only the OCR text.
 
         print(f"Analyzing all {len(self.answer_units)} answer units with AI...")
         print("Sending image to AI...")
-        solutions_data = self.ask_ai_about_all_gaps(marked_image)
+        format_repaired = False
+        try:
+            solutions_data = self.ask_ai_about_all_gaps(marked_image)
+        except ValueError:
+            # JSON/schema failures get one repair request, not an unbounded loop.
+            if not hasattr(self, "_solution_prompt"):
+                raise
+            marked_path = self.temporary_path(f"{Path(self.path).stem}_marked.png")
+            solutions_data = self._request_solutions(
+                str(marked_path), self._solution_prompt + "\nThe previous response was invalid. Return only valid JSON matching the schema, with every answer ID exactly once.",
+            )
+            format_repaired = True
         if not solutions_data:
             print("No response received from AI.")
             return {}
 
         print("Structured AI response received!")
+        expected = set(range(1, len(self.answer_units) + 1))
+        accepted, missing, issues = inspect_answers(solutions_data.solutions, expected)
+        self.answer_warnings = []
+        if missing and not format_repaired:
+            marked_path = self.temporary_path(f"{Path(self.path).stem}_marked.png")
+            repair_prompt = self._solution_prompt + (
+                "\nRepair the previous response. Return ONLY these unresolved IDs, "
+                f"each exactly once: {missing}. Do not return already resolved IDs."
+            )
+            try:
+                repair = self._request_solutions(str(marked_path), repair_prompt)
+                recovered, _, repair_issues = inspect_answers(repair.solutions, missing)
+                accepted.update(recovered)
+                if repair_issues:
+                    self.answer_warnings.extend(repair_issues)
+            except Exception as error:
+                self.answer_warnings.append(f"Answer repair failed: {error}")
+        unresolved = sorted(expected - accepted.keys())
+        if issues and not unresolved:
+            self.answer_warnings.append("The first AI response required validation/repair.")
+        elif issues:
+            self.answer_warnings.extend(issues)
         solutions = {}
-        for pair in solutions_data.solutions:
-            group_id = pair.key
-            group_index = group_id - 1
-            if 0 <= group_index < len(self.answer_units):
-                solutions[group_index] = {
-                    "gap_indices": self.answer_units[group_index],
-                    "solution": pair.value,
-                }
+        for number in sorted(expected):
+            solutions[number - 1] = {
+                "gap_indices": self.answer_units[number - 1],
+                "solution": accepted.get(number, ""),
+                "unresolved": number not in accepted,
+            }
+        if unresolved:
+            self.answer_warnings.append(f"Review unresolved answers: {unresolved}.")
+        for warning in self.answer_warnings:
+            print(f"Warning: {warning}")
         return solutions
+
+    def _report_model_progress(self, message):
+        if not self.debug:
+            return
+        callback = getattr(self, "progress_callback", None)
+        if callback is not None:
+            callback(message)
+
+    def _ollama_capabilities(self):
+        if not hasattr(self, "_local_capabilities"):
+            self._report_model_progress(f"Checking Ollama model {self.model_name}")
+            try:
+                with self._managed_ollama_client() as client:
+                    self._local_capabilities = client.show(self.model_name).capabilities or []
+            except httpx.TimeoutException as error:
+                raise TimeoutError(f"Ollama did not respond while checking model {self.model_name}.") from error
+        return self._local_capabilities
+
+    def _chat_with_ollama(self, *, messages, think, options, phase, response_format=None):
+        """Read active generations incrementally instead of timing out on a buffered reply."""
+        started = time.monotonic()
+        content, thinking = [], []
+        last_update, previous_state = started, None
+        self._report_model_progress(f"{phase}: waiting for Ollama (model loading / image processing)")
+        stream = None
+        try:
+            with self._managed_ollama_client() as client:
+                stream = client.chat(model=self.model_name, messages=messages, think=think,
+                                     format=response_format, options=options, stream=True)
+                try:
+                    for chunk in stream:
+                        now = time.monotonic()
+                        elapsed = now - started
+                        if elapsed > OLLAMA_MAX_SECONDS:
+                            raise TimeoutError(
+                                f"Ollama exceeded the {OLLAMA_MAX_SECONDS}-second generation limit during {phase.lower()}. "
+                                "Disable Thinking or select a faster local model, then retry. "
+                                "SOLVER_OLLAMA_MAX_SECONDS controls this limit."
+                            )
+                        message = chunk.message
+                        if message.content:
+                            content.append(message.content)
+                        if message.thinking:
+                            thinking.append(message.thinking)
+                        state = "writing answer" if content else "thinking" if thinking else "processing image"
+                        if state != previous_state or now - last_update >= 1:
+                            self._report_model_progress(f"{phase}: {state} · {elapsed:.0f} s")
+                            last_update, previous_state = now, state
+                        if chunk.done:
+                            if self.debug:
+                                count = getattr(chunk, "eval_count", None)
+                                print(f"Ollama {phase.lower()}: {elapsed:.1f} s, generated tokens: {count}")
+                            break
+                finally:
+                    close_stream = getattr(stream, "close", None)
+                    if close_stream is not None:
+                        close_stream()
+        except httpx.TimeoutException as error:
+            raise TimeoutError(
+                f"Ollama sent no data for {REQUEST_TIMEOUT_SECONDS} seconds during {phase.lower()} "
+                f"(model: {self.model_name}). The model may still be loading or processing the image. "
+                "Check Ollama, try disabling Thinking, or increase SOLVER_REQUEST_TIMEOUT_SECONDS."
+            ) from error
+        except (httpx.ConnectError, ConnectionError) as error:
+            raise ConnectionError("Cannot connect to Ollama. Start the local Ollama service and retry.") from error
+        return "".join(content), "".join(thinking)
+
+    def _ollama_client(self):
+        return ollama.Client(timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=10.0))
+
+    @contextmanager
+    def _managed_ollama_client(self):
+        """Close both older and newer SDK clients without requiring __enter__."""
+        client = self._ollama_client()
+        try:
+            yield client
+        finally:
+            close = getattr(client, "close", None)
+            if not callable(close):
+                # Older SDKs only expose cleanup through their HTTPX client.
+                close = getattr(getattr(client, "_client", None), "close", None)
+            if callable(close):
+                close()

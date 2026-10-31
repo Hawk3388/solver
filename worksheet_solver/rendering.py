@@ -98,27 +98,6 @@ class RenderingMixin:
             lines.append(" ".join(line_words))
         return lines, word_index
 
-    @staticmethod
-    def _ellipsize(draw, text, font, width):
-        """Fit text to one row without distorting glyphs."""
-        if not text:
-            return ""
-        bbox = draw.textbbox((0, 0), text, font=font)
-        if bbox[2] - bbox[0] <= width:
-            return text
-
-        suffix = "…"
-        low, high = 0, len(text)
-        while low < high:
-            middle = (low + high + 1) // 2
-            candidate = text[:middle].rstrip() + suffix
-            bbox = draw.textbbox((0, 0), candidate, font=font)
-            if bbox[2] - bbox[0] <= width:
-                low = middle
-            else:
-                high = middle - 1
-        return text[:low].rstrip() + suffix if low else suffix
-
     def _answer_capacity(self, unit, image_width):
         """Estimate how much text visibly fits in an answer unit."""
         boxes = [self.detected_gaps[index][:4] for index in unit]
@@ -241,8 +220,9 @@ class RenderingMixin:
         image_width = pil_image.width
         padding = max(3, int(round(image_width * 0.005)))
         answer_colour = (0, 0, 0)
+        self.render_warnings = []
 
-        for solution_data in solutions.values():
+        for answer_id, solution_data in solutions.items():
             gap_indices = solution_data.get("gap_indices", [])
             solution = self._normalise_solution_text(
                 solution_data.get("solution", "")
@@ -266,6 +246,8 @@ class RenderingMixin:
             )
             preferred_size = self._preferred_answer_font_size(image_width, rows)
             minimum_size = max(7, int(round(preferred_size * 0.72)))
+            if solution_data.get("font_size") is not None:
+                preferred_size = minimum_size = max(6, min(96, int(solution_data["font_size"])))
             lines = []
             word_index = 0
             font = None
@@ -296,21 +278,12 @@ class RenderingMixin:
 
             words = solution.split()
             if word_index < len(words):
-                last_row = rows[-1]
-                last_width = max(
-                    1,
-                    last_row[2] - last_row[0] - (2 * padding),
-                )
-                remaining = " ".join(words[word_index:])
-                combined = " ".join(
-                    part for part in [lines[-1], remaining] if part
-                )
-                lines[-1] = self._ellipsize(
-                    draw,
-                    combined,
-                    font,
-                    last_width,
-                )
+                self.render_warnings.append({
+                    "answer_id": int(answer_id) + 1,
+                    "kind": "overflow",
+                    "message": f"Answer {int(answer_id) + 1} does not fit. Its full text is retained in the editor; shorten it or enlarge the region.",
+                })
+                continue
 
             underline_positions = self._find_underlines_for_rows(
                 source_pixels,
@@ -333,6 +306,16 @@ class RenderingMixin:
                 else:
                     x = (row[0] + row[2]) / 2
                     anchor = "ms"
+                x += float(solution_data.get("offset_x", 0))
+                baseline_y += float(solution_data.get("offset_y", 0))
+                text_bounds = draw.textbbox((x, baseline_y), line, font=font, anchor=anchor)
+                if (text_bounds[0] < 0 or text_bounds[1] < 0
+                        or text_bounds[2] > pil_image.width or text_bounds[3] > pil_image.height):
+                    self.render_warnings.append({
+                        "answer_id": int(answer_id) + 1, "kind": "outside_page",
+                        "message": f"Answer {int(answer_id) + 1} extends outside the page; adjust its position.",
+                    })
+                    continue
                 draw.text(
                     (x, baseline_y),
                     line,
@@ -346,4 +329,6 @@ class RenderingMixin:
             raise OSError(f"Could not write solved worksheet: {output_path}")
 
         print(f"Solved worksheet saved as: {output_path}")
+        for warning in self.render_warnings:
+            print(f"Warning: {warning['message']}")
         return result_image

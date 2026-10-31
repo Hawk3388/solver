@@ -10,6 +10,10 @@ from google import genai
 import requests
 
 from worksheet_solver.batch import BatchResult, collect_input_images, solve_batch
+from worksheet_solver.config import (
+    DEFAULT_MODEL, DEFAULT_LOCAL, DEFAULT_THINK,
+    REQUEST_TIMEOUT_SECONDS, solver_defaults,
+)
 from worksheet_solver.detection import DetectionMixin
 from worksheet_solver.images import (
     MAX_OUTPUT_PIXELS,
@@ -31,31 +35,29 @@ class WorksheetSolver(DetectionMixin, SolvingMixin, RenderingMixin):
         self,
         path: str,
         gap_detection_model_path: str = "",
-        llm_model_name: str = "gemini-3-flash-preview",
-        think: bool = True,
-        local: bool = False,
-        thinking_budget: int = 2048,
+        llm_model_name: str = DEFAULT_MODEL,
+        think: bool = DEFAULT_THINK,
+        local: bool = DEFAULT_LOCAL,
         debug: bool = False,
-        experimental: bool = False,
         detection_runtime: DetectionModelRuntime | None = None,
         max_output_pixels: int = MAX_OUTPUT_PIXELS,
         auto_rotate_page: bool = True,
         correct_perspective: bool = True,
     ):
         self.debug = debug
-        self.model_name = llm_model_name
+        if not isinstance(llm_model_name, str) or not llm_model_name.strip():
+            raise ValueError("Model name must not be empty.")
+        self.model_name = llm_model_name.strip()
         self.local = local
         self.path = str(path)
-        self.thinking_budget = thinking_budget
         self.think = think
-        self.experimental = experimental
         self.max_output_pixels = max_output_pixels
         self.auto_rotate_page = auto_rotate_page
         self.correct_perspective = correct_perspective
         self.original_path = str(Path(path).expanduser().resolve())
-
-        if self.experimental and not self.local:
-            raise ValueError("Experimental mode requires local mode.")
+        self.answer_warnings = []
+        self.render_warnings = []
+        self.normalization_info = {}
 
         if detection_runtime is not None:
             if gap_detection_model_path and (
@@ -100,8 +102,6 @@ class WorksheetSolver(DetectionMixin, SolvingMixin, RenderingMixin):
 
             if not self.local:
                 self._configure_cloud_client()
-            if self.experimental:
-                self._configure_experimental_pipeline()
 
             self.detection_runtime = (
                 detection_runtime
@@ -160,6 +160,7 @@ class WorksheetSolver(DetectionMixin, SolvingMixin, RenderingMixin):
             max_output_pixels=self.max_output_pixels,
             auto_rotate_page=self.auto_rotate_page,
             correct_perspective=self.correct_perspective,
+            metadata=self.normalization_info,
         )
 
         self.path = str(converted_path)
@@ -174,90 +175,10 @@ class WorksheetSolver(DetectionMixin, SolvingMixin, RenderingMixin):
                 "Google API key not found. Set GOOGLE_API_KEY in the "
                 "environment or .env file."
             )
-        self.client = genai.Client(api_key=api_key)
-
-    def _configure_experimental_pipeline(self):
-        """Initialize the optional local Transformers pipeline."""
-        from lmformatenforcer import JsonSchemaParser
-        from lmformatenforcer.integrations.transformers import (
-            build_transformers_prefix_allowed_tokens_fn,
-        )
-        import torch
-        from transformers import AutoTokenizer, BitsAndBytesConfig, pipeline
-        from transformers.generation import LogitsProcessor
-
-        class ThinkingTokenBudgetProcessor(LogitsProcessor):
-            def __init__(self, tokenizer, max_thinking_tokens=None):
-                self.tokenizer = tokenizer
-                self.max_thinking_tokens = max_thinking_tokens
-                self.think_end_token = tokenizer.encode(
-                    "</think>",
-                    add_special_tokens=False,
-                )[0]
-                self.newline_token = tokenizer.encode(
-                    "\n",
-                    add_special_tokens=False,
-                )[0]
-                self.tokens_generated = 0
-                self.stopped_thinking = False
-                self.negative_infinity = float("-inf")
-
-            def __call__(self, input_ids, scores):
-                self.tokens_generated += 1
-                if (
-                    self.max_thinking_tokens == 0
-                    and not self.stopped_thinking
-                    and self.tokens_generated > 0
-                ):
-                    scores[:] = self.negative_infinity
-                    scores[0][self.newline_token] = 0
-                    scores[0][self.think_end_token] = 0
-                    self.stopped_thinking = True
-                    return scores
-
-                if (
-                    self.max_thinking_tokens is not None
-                    and not self.stopped_thinking
-                ):
-                    progress = self.tokens_generated / self.max_thinking_tokens
-                    if progress > 0.95:
-                        scores[0][self.newline_token] = (
-                            scores[0][self.think_end_token] * (1 + progress)
-                        )
-                        scores[0][self.think_end_token] *= 1 + progress
-
-                    if self.tokens_generated >= self.max_thinking_tokens - 1:
-                        scores[:] = self.negative_infinity
-                        if self.tokens_generated == self.max_thinking_tokens - 1:
-                            scores[0][self.newline_token] = 0
-                        else:
-                            scores[0][self.think_end_token] = 0
-                            self.stopped_thinking = True
-                return scores
-
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        processor = ThinkingTokenBudgetProcessor(
-            tokenizer,
-            max_thinking_tokens=(self.thinking_budget if self.think else 0),
-        )
-        schema_parser = JsonSchemaParser(get_solution.model_json_schema())
-        self.prefix_function = build_transformers_prefix_allowed_tokens_fn(
-            tokenizer,
-            schema_parser,
-        )
-        self.pipe = pipeline(
-            "image-text-to-text",
-            model=self.model_name,
-            max_new_tokens=4096,
-            logits_processor=[processor],
-            device=0,
-            model_kwargs={"quantization_config": quantization_config},
+        from google.genai import types
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_SECONDS * 1000),
         )
 
     @classmethod
@@ -393,12 +314,7 @@ def main():
             results = solve_batch(
                 images,
                 output_directory,
-                solver_kwargs={
-                    "llm_model_name": "qwen3.8",
-                    "think": False,
-                    "local": True,
-                    "debug": False,
-                },
+                solver_kwargs=solver_defaults(),
                 solver_class=WorksheetSolver,
             )
             successful = [result for result in results if result.success]
@@ -415,9 +331,7 @@ def main():
         path = str(images[0])
         solver = WorksheetSolver(
             path,
-            llm_model_name="qwen3.8",
-            think=False,
-            local=True,
+            **solver_defaults(),
             debug=True,
         )
         print("Loading image and detecting gaps...")

@@ -2,12 +2,12 @@
 
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Pair(BaseModel):
-    key: int
-    value: str
+    key: int = Field(strict=True)
+    value: str = Field(strict=True)
 
 
 class get_solution(BaseModel):

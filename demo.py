@@ -9,6 +9,7 @@ import gradio as gr
 from PIL import Image
 
 from main import WorksheetSolver
+from worksheet_solver.config import solver_defaults
 
 warnings.filterwarnings("ignore")
 
@@ -28,12 +29,8 @@ def solve_worksheet(image_path: str):
 
 			solver = WorksheetSolver(
 				input_path,
-				llm_model_name="gemini-3-flash-preview",
-				think=True,
-				local=False,
-				thinking_budget=2048,
+				**solver_defaults(),
 				debug=False,
-				experimental=False,
 			)
 
 			gaps, detected_image = solver.detect_gaps()

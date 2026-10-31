@@ -1,7 +1,11 @@
 """Safe worksheet image validation and normalization."""
 
 import math
+import io
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import warnings
 
 import cv2
@@ -106,6 +110,8 @@ def _correct_page_perspective(image: Image.Image) -> Image.Image | None:
         corners = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
         if len(corners) != 4:
             continue
+        if not cv2.isContourConvex(corners):
+            continue
 
         points = corners.reshape(4, 2).astype("float32")
         point_sums = points.sum(axis=1)
@@ -120,6 +126,8 @@ def _correct_page_perspective(image: Image.Image) -> Image.Image | None:
             dtype="float32",
         )
         top_left, top_right, bottom_right, bottom_left = ordered
+        if len(np.unique(ordered, axis=0)) != 4:
+            continue
         target_width = int(
             max(
                 np.linalg.norm(bottom_right - bottom_left),
@@ -133,6 +141,15 @@ def _correct_page_perspective(image: Image.Image) -> Image.Image | None:
             )
         )
         if target_width < 64 or target_height < 64:
+            continue
+        # Reject implausible crops and nearly rectangular scans needing no warp.
+        ratio = max(target_width, target_height) / min(target_width, target_height)
+        if ratio > 2.2:
+            continue
+        if (abs(top_left[1] - top_right[1]) < 3
+                and abs(bottom_left[1] - bottom_right[1]) < 3
+                and abs(top_left[0] - bottom_left[0]) < 3
+                and abs(top_right[0] - bottom_right[0]) < 3):
             continue
         _validate_dimensions(target_width, target_height)
 
@@ -156,6 +173,35 @@ def _correct_page_perspective(image: Image.Image) -> Image.Image | None:
     return None
 
 
+def _text_rotation(image):
+    """Use Tesseract's script/orientation detector, never page aspect ratio."""
+    executable = shutil.which("tesseract")
+    if not executable:
+        return 0, "Orientation was not auto-detected; review the page and rotate if needed."
+    sample = image.copy()
+    try:
+        sample.thumbnail((1800, 1800))
+        buffer = io.BytesIO()
+        sample.save(buffer, format="PNG", dpi=(300, 300))
+        result = subprocess.run(
+            [executable, "stdin", "stdout", "--psm", "0"],
+            input=buffer.getvalue(), capture_output=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        output = result.stdout.decode("utf-8", errors="replace")
+        angle = re.search(r"Rotate:\s*(\d+)", output)
+        confidence = re.search(r"Orientation confidence:\s*([\d.]+)", output)
+        if result.returncode == 0 and angle and confidence and float(confidence[1]) >= 8:
+            rotation = int(angle[1])
+            if rotation in (0, 90, 180, 270):
+                return rotation, None
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    finally:
+        sample.close()
+    return 0, "Text orientation is uncertain; review the page and rotate if needed."
+
+
 def normalize_worksheet_image(
     source_path: str | Path,
     destination_path: str | Path,
@@ -163,6 +209,7 @@ def normalize_worksheet_image(
     max_output_pixels: int = MAX_OUTPUT_PIXELS,
     auto_rotate_page: bool = True,
     correct_perspective: bool = True,
+    metadata: dict | None = None,
 ) -> Path:
     """Normalize a worksheet to an oriented, opaque, bounded RGB PNG."""
     if max_output_pixels <= 0 or max_output_pixels > MAX_SOURCE_PIXELS:
@@ -188,17 +235,24 @@ def normalize_worksheet_image(
 
                 oriented = own(ImageOps.exif_transpose(source_image), source_image)
                 normalized = own(_flatten_to_rgb(oriented), oriented)
+                info = {"rotation": 0, "perspective_corrected": False, "warnings": []}
 
                 if correct_perspective:
                     corrected = _correct_page_perspective(normalized)
                     if corrected is not None:
                         resources.append(corrected)
                         normalized = corrected
+                        info["perspective_corrected"] = True
 
-                if auto_rotate_page and normalized.width > normalized.height:
-                    rotated = normalized.transpose(Image.Transpose.ROTATE_90)
-                    resources.append(rotated)
-                    normalized = rotated
+                if auto_rotate_page:
+                    angle, warning = _text_rotation(normalized)
+                    info["rotation"] = angle
+                    if warning:
+                        info["warnings"].append(warning)
+                    if angle:
+                        rotated = normalized.rotate(-angle, expand=True)
+                        resources.append(rotated)
+                        normalized = rotated
 
                 pixel_count = normalized.width * normalized.height
                 if pixel_count > max_output_pixels:
@@ -219,6 +273,8 @@ def normalize_worksheet_image(
                 if dpi:
                     save_options["dpi"] = dpi
                 normalized.save(destination, **save_options)
+                if metadata is not None:
+                    metadata.update(info)
     except ImageNormalizationError:
         destination.unlink(missing_ok=True)
         raise
