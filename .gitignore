@@ -20,3 +20,4 @@ gradio/
 .gradio/
 feedback/
 .venv/
+.venv-build/

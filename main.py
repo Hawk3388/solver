@@ -11,7 +11,7 @@ import requests
 
 from worksheet_solver.batch import BatchResult, collect_input_images, solve_batch
 from worksheet_solver.config import (
-    DEFAULT_MODEL, DEFAULT_LOCAL, DEFAULT_THINK,
+    DATA_ROOT, DEFAULT_MODEL, DEFAULT_LOCAL, DEFAULT_THINK,
     REQUEST_TIMEOUT_SECONDS, solver_defaults,
 )
 from worksheet_solver.detection import DetectionMixin
@@ -185,7 +185,7 @@ class WorksheetSolver(DetectionMixin, SolvingMixin, RenderingMixin):
     def resolve_gap_model(cls, debug: bool = False) -> str:
         """Return an installed detector model or download it on first use."""
         releases_url = "https://github.com/Hawk3388/solver/releases"
-        model_directory = Path("./model")
+        model_directory = DATA_ROOT / "model"
         model_directory.mkdir(parents=True, exist_ok=True)
         version_pattern = re.compile(r"^v\d+\.\d+\.\d+$")
         installed_versions = [

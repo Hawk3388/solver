@@ -59,6 +59,8 @@ A CUDA-capable GPU is recommended for detector training and large local models. 
 
 ## Quick Start
 
+For a packaged Windows release, see [Run the Windows executable](#run-the-windows-executable). To create your own release, see [Build solverexe and publish a release](#build-solverexe-and-publish-a-release).
+
 ### 1. Clone the repository
 
 ```bash
@@ -142,6 +144,98 @@ Web, CLI, Gradio, and Python constructor defaults are read from `worksheet_solve
 | `SOLVER_DATASET_DIR` | `dataset/` | Destination for reviewed YOLO samples |
 
 Explicit Python arguments and web settings override the shared model defaults for the current operation. Restart the server after changing environment defaults.
+
+## Run the Windows Executable
+
+1. Download `solver.zip` from [GitHub Releases](https://github.com/Hawk3388/solver/releases), then extract the entire archive into a writable folder.
+2. For local solving, install and start Ollama separately and install your chosen vision model. The default model name is `qwen3.8`, with Thinking disabled.
+3. If you want to change the defaults, copy `.env.example` to `.env` beside `solver.exe`. For Gemini, enter your own API key and set `SOLVER_LOCAL=false` and `SOLVER_MODEL=gemini-3-flash-preview`.
+4. Run `solver.exe`, keep its console window open, and open [http://127.0.0.1:5000](http://127.0.0.1:5000).
+5. Stop the server with **Ctrl+C** in its console before replacing the executable with a newer version.
+
+Python is included in the executable. Ollama, its language-model weights, and optional Tesseract are separate installations. If no detector weights are included, first use requires an internet connection to download them. A manual installation uses `model/vX.Y.Z/gap_detection_model.pt` beside the EXE; `model/gap_detection_model.pt` alone is not searched.
+
+The executable bundles the web interface and fonts. It reads `.env` and keeps the detector model, consented feedback, and dataset contributions beside the EXE by default. Job files remain temporary. A one-file executable extracts its bundled libraries at startup, so opening it can take a little time; see [PyInstaller's one-file behavior](https://pyinstaller.org/en/stable/operating-mode.html#how-the-one-file-program-works).
+
+## Build `solver.exe` and Publish a Release
+
+The existing [`solver.spec`](solver.spec) is the build configuration. It packages `app.py` as a single `solver.exe` with a console window, includes `templates/`, `static/`, and `fonts/`, and lists the Uvicorn imports needed by the FastAPI server. Build on **64-bit Windows** to produce a Windows executable.
+
+### 1. Prepare an isolated build environment
+
+Run these commands in PowerShell from the repository root. A separate environment avoids accidentally bundling unrelated tools from a development or Conda environment. The example uses 64-bit Python 3.12:
+
+```powershell
+py -3.12 -m venv .venv-build
+.\.venv-build\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-build\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.\.venv-build\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv-build\Scripts\python.exe -m pip install --upgrade pyinstaller pyinstaller-hooks-contrib
+.\.venv-build\Scripts\python.exe -m pip check
+```
+
+The CPU build is suitable for distributing the YOLO detector without CUDA libraries. It does not change whether a separately installed Ollama uses a GPU. If you deliberately distribute GPU-enabled detector inference, build in an environment with the intended PyTorch/CUDA packages and check the resulting artifact size and target-machine compatibility.
+
+### 2. Build using `solver.spec`
+
+Stop any previously built executable before rebuilding, then run:
+
+```powershell
+.\.venv-build\Scripts\python.exe -m PyInstaller --clean --noconfirm solver.spec
+```
+
+The output is **`dist/solver.exe`**. Build intermediates and diagnostics are written under `build/solver/`. Keep using the spec file rather than generating a new one from `app.py`; the spec contains the bundled resources and hidden imports. Build-mode options belong in the spec, as explained in [PyInstaller's spec-file documentation](https://pyinstaller.org/en/stable/spec-files.html).
+
+The spec does not embed detector weights, Ollama models, `.env`, feedback, or the training dataset. Keep your private `.env` out of every release archive.
+
+### 3. Assemble `solver.zip`
+
+Run the packaging script after building the executable:
+
+```powershell
+python create_release.py
+```
+
+[`create_release.py`](create_release.py) uses only the Python standard library. It takes `dist/solver.exe` (falling back to `solver/solver.exe`), the current repository's README, license and `.env.example`, and the newest available `model/vX.Y.Z/gap_detection_model.pt`. Versions are sorted numerically, so `v1.10.0` is newer than `v1.9.0`.
+
+The output is `dist/solver.zip` and its `dist/solver.zip.sha256` checksum. The script verifies the ZIP before replacing the destination and includes only the five release files. It does not build the EXE, modify the existing `solver/` folder, or include private `.env` files and datasets.
+
+To replace an existing archive, select another executable, or change the output path:
+
+```powershell
+python create_release.py --force
+python create_release.py --exe .\dist\solver.exe --output .\solver.zip
+```
+
+With detector version `v1.2.1`, the archive has this layout:
+
+```text
+solver.zip
+├── solver.exe
+├── .env.example
+├── README.md
+├── LICENSE.md
+└── model/
+    └── v1.2.1/
+        └── gap_detection_model.pt
+```
+
+Detector versions are independent of application releases: an app update continues to ship `model/v1.2.1/` until newer weights are added under `model/`. The packaging script preserves the selected model directory's version; it never renames it to the app release tag. Bundling the detector makes detector startup independent of a first-run download. The selected solving backend still needs either the local Ollama service or access to Gemini.
+
+### 4. Verify the packaged application
+
+Extract the new ZIP into a separate writable folder and launch its `solver.exe`. Verify the browser interface, one upload, a multi-image batch, direct answer editing, PNG/ZIP downloads, and the backend you intend to support. Check that templates, styles, scripts, and fonts are available, and that no private `.env` was included. If possible, repeat the check on a Windows machine without your development Python environment.
+
+Keep the console enabled while diagnosing startup errors. If the build fails, inspect the terminal output and `build/solver/warn-solver.txt`; missing optional modules in that file are not automatically build failures. If startup fails, the console traceback is the relevant diagnostic. A successful PyInstaller build alone does not verify that model inference works on the target machine.
+
+### 5. Create the GitHub release
+
+Commit and push the reviewed source changes first, so the release tag points to the source used for the build. In [Hawk3388/solver releases](https://github.com/Hawk3388/solver/releases), choose **Draft a new release**, create the intended `vX.Y.Z` tag on that commit, and attach:
+
+- `dist/solver.zip`: the Windows application package;
+- `dist/solver.zip.sha256`: its SHA-256 checksum.
+
+Publish a standalone asset named exactly `gap_detection_model.pt` when releasing updated detector weights. The model resolver discovers those assets under `vX.Y.Z` release tags; an app-only update does not need a new detector asset or a renamed model folder. GitHub's automatically generated **Source code** archives do not contain a built EXE. Include the backend prerequisites, installation steps, and relevant changes in the release notes, then publish after checking the uploaded assets. See [GitHub's release instructions](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository).
 
 ## Web Interface
 
@@ -329,6 +423,7 @@ main.py
 | Path | Responsibility |
 | --- | --- |
 | `app.py` | FastAPI application factory and lifespan, job API, binary downloads, document edits, and feedback routes |
+| `create_release.py` | Verified Windows release ZIP with the latest local detector and SHA-256 checksum |
 | `templates/index.html` | Semantic markup for the workspace, editor, and consent dialogs |
 | `static/app.css` | Consolidated responsive styles, animation, and reduced-motion support |
 | `static/app.js` | Upload state, progress polling, editor interaction, previews, and feedback |
