@@ -36,6 +36,13 @@ _runtime = None
 _runtime_lock = Lock()
 
 
+class ServerAddressFilter(logging.Filter):
+    """Keep the two usable addresses printed by the app instead of Uvicorn's bind URL."""
+
+    def filter(self, record):
+        return not record.getMessage().startswith("Uvicorn running on ")
+
+
 def detection_runtime():
     global _runtime
     with _runtime_lock:
@@ -314,4 +321,8 @@ if __name__ == "__main__":
     host, port = "0.0.0.0", 5000
     print(f"Open http://127.0.0.1:{port}")
     print(f"Local network: http://{socket.gethostbyname(socket.gethostname())}:{port}")
-    uvicorn.run(app, host=host, port=port, loop="asyncio", http="h11", ws="none", lifespan="on", workers=1)
+    log_config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    log_config["filters"] = {"server_address": {"()": ServerAddressFilter}}
+    log_config["handlers"]["default"]["filters"] = ["server_address"]
+    uvicorn.run(app, host=host, port=port, loop="asyncio", http="h11", ws="none", lifespan="on",
+                workers=1, log_config=log_config)

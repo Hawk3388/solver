@@ -163,25 +163,18 @@ The existing [`solver.spec`](solver.spec) is the build configuration. It package
 
 ### 1. Prepare an isolated build environment
 
-Run these commands in PowerShell from the repository root. A separate environment avoids accidentally bundling unrelated tools from a development or Conda environment. The example uses 64-bit Python 3.12:
+The release script automatically creates its own environment at `build/release-env/`. It installs CPU-only PyTorch and Torchvision from the [official CPU wheel index](https://pytorch.org/get-started/locally/), followed by the application and build dependencies in [`requirements-build.txt`](requirements-build.txt). Your development or Conda environment is not used for dependency collection and its installed packages are not changed.
 
-```powershell
-py -3.12 -m venv .venv-build
-.\.venv-build\Scripts\python.exe -m pip install --upgrade pip
-.\.venv-build\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.\.venv-build\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv-build\Scripts\python.exe -m pip install --upgrade pyinstaller pyinstaller-hooks-contrib
-.\.venv-build\Scripts\python.exe -m pip check
-```
+Install 64-bit Python first; Python 3.12 is recommended for release builds. Run the script with that interpreter from PowerShell. The first build needs an internet connection to install dependencies. Later runs reuse the environment, refresh dependencies when the requirements change, and verify that CPU-only wheels are still installed before building.
 
-The CPU build is suitable for distributing the YOLO detector without CUDA libraries. It does not change whether a separately installed Ollama uses a GPU. If you deliberately distribute GPU-enabled detector inference, build in an environment with the intended PyTorch/CUDA packages and check the resulting artifact size and target-machine compatibility.
+The Windows release runs YOLO detection on CPU. This does not change whether a separately installed Ollama uses a GPU. The spec rejects GPU-enabled PyTorch and unexpected CUDA libraries. It excludes Gradio, Transformers, ONNX Runtime, native GUI toolkits, notebook tools, and project training/dataset scripts, and limits Matplotlib to its non-interactive Agg backend. The executable starts only `app.py`; the solver classes it imports remain required application dependencies.
 
 ### 2. Build using `solver.spec`
 
-To build only the executable, stop any previously built executable and run the command below. If you want the complete release ZIP, go directly to step 3; its script performs this build automatically.
+For the complete release ZIP, go directly to step 3. If you later need only the executable, stop any running `solver.exe` and use the already prepared CPU build environment:
 
 ```powershell
-.\.venv-build\Scripts\python.exe -m PyInstaller --clean --noconfirm solver.spec
+.\build\release-env\Scripts\python.exe -m PyInstaller --clean --noconfirm solver.spec
 ```
 
 The output is **`dist/solver.exe`**. Build intermediates and diagnostics are written under `build/solver/`. Keep using the spec file rather than generating a new one from `app.py`; the spec contains the bundled resources and hidden imports. Build-mode options belong in the spec, as explained in [PyInstaller's spec-file documentation](https://pyinstaller.org/en/stable/spec-files.html).
@@ -190,17 +183,17 @@ The spec does not embed detector weights, Ollama models, `.env`, feedback, or th
 
 ### 3. Build and assemble `solver.zip`
 
-Stop any running `solver.exe`, then run the release script with the Python environment containing the project requirements and PyInstaller:
+Stop any running `solver.exe`, then run the release script. It prepares the isolated CPU environment and builds the EXE automatically; PyInstaller does not need to be installed in the interpreter launching the script:
 
 ```powershell
-.\.venv-build\Scripts\python.exe create_release.py
+python create_release.py --force
 ```
 
-[`create_release.py`](create_release.py) first runs PyInstaller with `solver.spec` using the same Python interpreter as the script. It builds into a temporary output folder, then replaces `dist/solver.exe` only after a successful build. It packages that newly built executable, the current repository's README, license and `.env.example`, and the newest available `model/vX.Y.Z/gap_detection_model.pt`. Versions are sorted numerically, so `v1.10.0` is newer than `v1.9.0`.
+[`create_release.py`](create_release.py) runs PyInstaller with `solver.spec` using `build/release-env/`, regardless of the environment used to launch the script. It builds into a temporary output folder, then replaces `dist/solver.exe` only after a successful build. It packages that newly built executable, the current repository's README, license and `.env.example`, and the newest available `model/vX.Y.Z/gap_detection_model.pt`. Versions are sorted numerically, so `v1.10.0` is newer than `v1.9.0`.
 
 The output is `dist/solver.exe`, `dist/solver.zip`, and its `dist/solver.zip.sha256` checksum. The script verifies the ZIP before replacing the destination and includes only the five release files. Build failures stop packaging and preserve the previous executable and ZIP. The existing `solver/` folder, private `.env` files, and datasets are not included or modified.
 
-Use `--force` to replace an existing archive. When the build environment is activated, the commands can be shortened to:
+Use `--force` to replace an existing archive, or select another output path:
 
 ```powershell
 python create_release.py --force
@@ -430,6 +423,7 @@ main.py
 | --- | --- |
 | `app.py` | FastAPI application factory and lifespan, job API, binary downloads, document edits, and feedback routes |
 | `create_release.py` | PyInstaller build followed by a verified release ZIP with the latest local detector and SHA-256 checksum |
+| `requirements-build.txt` | CPU-only PyTorch pins and tools for the isolated release build |
 | `templates/index.html` | Semantic markup for the workspace, editor, and consent dialogs |
 | `static/app.css` | Consolidated responsive styles, animation, and reduced-motion support |
 | `static/app.js` | Upload state, progress polling, editor interaction, previews, and feedback |

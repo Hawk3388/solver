@@ -2,7 +2,7 @@
 
 import argparse
 import hashlib
-from importlib.util import find_spec
+import json
 import os
 from pathlib import Path
 import re
@@ -16,26 +16,85 @@ MODEL_FILENAME = "gap_detection_model.pt"
 VERSION_PATTERN = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 
 
+def build_environment(project_root):
+    """Prepare a private venv instead of freezing the caller's development environment."""
+    build_directory = project_root / "build"
+    environment = build_directory / "release-env"
+    marker = build_directory / "release-env.json"
+    requirements = project_root / "requirements-build.txt"
+    runtime_requirements = project_root / "requirements.txt"
+    for path in (requirements, runtime_requirements):
+        if not path.is_file():
+            raise FileNotFoundError(f"Release requirements are missing: {path}")
+    fingerprint = hashlib.sha256(
+        b"cpu-release-env-v1\n" + requirements.read_bytes() + runtime_requirements.read_bytes()
+    ).hexdigest()
+    if environment.exists() and not marker.is_file():
+        raise ValueError(f"Unmanaged build environment at {environment}. Move it before running the release script.")
+    state = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else {}
+    if state.get("environment", str(environment)) != str(environment):
+        raise ValueError(f"Unexpected build environment path in {marker}.")
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    process_environment = os.environ.copy()
+    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_TARGET", "PIP_PREFIX", "PIP_USER"):
+        process_environment.pop(name, None)
+    process_environment["PYTHONNOUSERSITE"] = "1"
+    process_environment["PYTHONUTF8"] = "1"
+    build_directory.mkdir(parents=True, exist_ok=True)
+    settings_directory = build_directory / "ultralytics-settings"
+    settings_directory.mkdir(exist_ok=True)
+    process_environment["YOLO_CONFIG_DIR"] = str(settings_directory)
+    process_environment["YOLO_AUTOINSTALL"] = "false"
+
+    if not python.is_file() or state.get("fingerprint") != fingerprint:
+        marker.write_text(json.dumps({"environment": str(environment), "status": "preparing"}), encoding="utf-8")
+        if not python.is_file():
+            print(f"Creating isolated release environment: {environment}", flush=True)
+            subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True, env=process_environment)
+        pip = [str(python), "-m", "pip", "--disable-pip-version-check"]
+        subprocess.run(pip + ["install", "--upgrade", "pip"], check=True, env=process_environment)
+        cpu_packages = [line.strip() for line in requirements.read_text(encoding="utf-8").splitlines()
+                        if line.startswith(("torch==", "torchvision=="))]
+        if len(cpu_packages) != 2 or any("+cpu" not in package for package in cpu_packages):
+            raise ValueError("requirements-build.txt must pin CPU-only torch and torchvision wheels.")
+        print("Installing CPU-only PyTorch for the release build...", flush=True)
+        subprocess.run(pip + ["install", "--upgrade", "--force-reinstall", "--index-url",
+                             "https://download.pytorch.org/whl/cpu", *cpu_packages],
+                       check=True, env=process_environment)
+        subprocess.run(pip + ["install", "-r", str(requirements)], cwd=project_root,
+                       check=True, env=process_environment)
+        subprocess.run(pip + ["check"], check=True, env=process_environment)
+    # Check on every build, including cached environments.
+    verification = (
+        "import sys, pathlib, torch, torchvision; "
+        "assert pathlib.Path(sys.prefix).resolve() == pathlib.Path(sys.argv[1]).resolve(), 'Wrong build interpreter'; "
+        "assert sys.prefix != sys.base_prefix, 'Build requires an isolated virtual environment'; "
+        "assert torch.version.cuda is None and getattr(torch.version, 'hip', None) is None, 'GPU PyTorch is not allowed'; "
+        "assert '+cpu' in torch.__version__ and '+cpu' in torchvision.__version__, 'CPU wheels are required'; "
+        "print('Verified CPU build: torch', torch.__version__, '/ torchvision', torchvision.__version__)"
+    )
+    subprocess.run([str(python), "-c", verification, str(environment)], check=True, env=process_environment)
+    marker.write_text(json.dumps({"environment": str(environment), "fingerprint": fingerprint}), encoding="utf-8")
+    return python, process_environment
+
+
 def build_executable(project_root):
     """Only replace dist/solver.exe after a successful, isolated PyInstaller build."""
     spec = project_root / "solver.spec"
     if not spec.is_file():
         raise FileNotFoundError(f"Build configuration is missing: {spec}")
-    if find_spec("PyInstaller") is None:
-        raise ModuleNotFoundError(
-            f"PyInstaller is not installed for {sys.executable}. "
-            "Install the project requirements and run: python -m pip install pyinstaller pyinstaller-hooks-contrib"
-        )
+    python, process_environment = build_environment(project_root)
     build_directory = project_root / "build"
     build_directory.mkdir(parents=True, exist_ok=True)
     destination = project_root / "dist" / "solver.exe"
-    print(f"Building solver.exe with {sys.executable} and {spec}...", flush=True)
+    print(f"Building app.py with CPU-only environment {python} and {spec}...", flush=True)
     with tempfile.TemporaryDirectory(prefix="release-build-", dir=build_directory) as staging:
         subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm",
+            [str(python), "-m", "PyInstaller", "--clean", "--noconfirm",
              "--distpath", staging, "--workpath", str(build_directory), str(spec)],
             cwd=project_root,
             check=True,
+            env=process_environment,
         )
         executable = Path(staging) / "solver.exe"
         if not executable.is_file() or not executable.stat().st_size:
@@ -162,7 +221,7 @@ def main(argv=None):
     try:
         create_release(executable=args.exe, output=args.output, force=args.force, skip_build=args.skip_build)
     except subprocess.CalledProcessError as error:
-        print(f"PyInstaller failed with exit code {error.returncode}. The release ZIP was not updated.", file=sys.stderr)
+        print(f"Release environment setup or build failed with exit code {error.returncode}. The release ZIP was not updated.", file=sys.stderr)
         return 1
     except (OSError, ValueError, zipfile.BadZipFile, ImportError) as error:
         print(f"Release packaging failed: {error}", file=sys.stderr)

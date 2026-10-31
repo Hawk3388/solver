@@ -1,0 +1,7 @@
+# Used only in the isolated Windows release environment.
+# create_release.py installs the CPU wheels from PyTorch's CPU index first.
+-r requirements.txt
+torch==2.10.0+cpu
+torchvision==0.25.0+cpu
+pyinstaller>=6.19,<7
+pyinstaller-hooks-contrib>=2026.2
