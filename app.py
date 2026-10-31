@@ -1,4 +1,4 @@
-"""FastAPI server for queued worksheet solving, editing and feedback."""
+"""FastAPI server for queued worksheet solving and editing."""
 
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -24,10 +24,9 @@ import uvicorn
 
 from worksheet_solver.config import (
     PROJECT_ROOT, MAX_BATCH_FILES, MAX_FILE_SIZE, MAX_PENDING_JOBS,
-    JOB_TTL_SECONDS, FEEDBACK_DIRECTORY, DATASET_DIRECTORY, solver_defaults,
+    JOB_TTL_SECONDS, solver_defaults,
 )
 from worksheet_solver.documents import DocumentEdits, render_document, validate_edits
-from worksheet_solver.feedback import FeedbackRequest, FeedbackStore
 from worksheet_solver.jobs import JobManager, QueueFullError
 from worksheet_solver.web_processing import process_worksheet
 
@@ -107,7 +106,7 @@ def download_stem(filename):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")[:160] or "worksheet"
 
 
-def create_app(processor=None, feedback_store=None):
+def create_app(processor=None):
     @asynccontextmanager
     async def lifespan(application):
         manager = JobManager(processor or default_processor, MAX_PENDING_JOBS, JOB_TTL_SECONDS)
@@ -121,7 +120,6 @@ def create_app(processor=None, feedback_store=None):
             await run_in_threadpool(manager.close)
 
     app = FastAPI(title="Worksheet Solver", version="1.0.0", lifespan=lifespan)
-    app.state.worksheet_feedback = feedback_store or FeedbackStore(FEEDBACK_DIRECTORY, DATASET_DIRECTORY)
     app.add_middleware(RequestLimitsMiddleware, max_body_size=MAX_FILE_SIZE * MAX_BATCH_FILES)
     app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "static"), name="static")
     templates = Jinja2Templates(directory=PROJECT_ROOT / "templates")
@@ -303,14 +301,6 @@ def create_app(processor=None, feedback_store=None):
             return FileResponse(archive_path, media_type="application/zip", filename="worksheet_solutions.zip",
                                 headers={"Cache-Control": "private, no-store"})
 
-    @app.post("/api/jobs/{job_id}/items/{item_id}/feedback", status_code=201)
-    def report_feedback(job_id: str, item_id: str, payload: FeedbackRequest):
-        job, item = get_item(job_id, item_id)
-        with job.lock:
-            if item["state"] in {"queued", "running"}:
-                raise HTTPException(status_code=409, detail="Wait for processing before reporting this worksheet.")
-            return app.state.worksheet_feedback.submit(payload.model_dump(), item["document"],
-                                                       item["directory"] / "page.png", item["filename"])
 
     return app
 

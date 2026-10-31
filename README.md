@@ -23,7 +23,7 @@ The project includes a modern web interface, a command-line workflow, a Python A
 - Downloads one solved worksheet as PNG or multiple results as a ZIP archive.
 - Lets you type directly into answers on the worksheet, with optional tools for adjusting detection areas.
 - Processes uploads in a bounded background queue with per-file progress and retry.
-- Stores error reports locally and adds reviewed detection labels to the training dataset only with explicit consent.
+- Opens GitHub Issues for user-submitted error reports and attachments, including self-hosted installations.
 - Reuses one thread-safe YOLO runtime per server process.
 - Normalizes and validates images before inference.
 - Expires web job files after an inactivity window; CLI and API solvers clean up their own temporary files.
@@ -140,8 +140,6 @@ Web, CLI, Gradio, and Python constructor defaults are read from `worksheet_solve
 | `SOLVER_OLLAMA_MAX_SECONDS` | `600` | Local generation time limit, checked between streamed chunks |
 | `SOLVER_MAX_BATCH_FILES` | `10` | Upload count limit |
 | `SOLVER_MAX_FILE_MB` | `10` | Per-file size limit |
-| `SOLVER_FEEDBACK_DIR` | `feedback/` | Persistent error reports and consented images |
-| `SOLVER_DATASET_DIR` | `dataset/` | Destination for reviewed YOLO samples |
 
 Explicit Python arguments and web settings override the shared model defaults for the current operation. Restart the server after changing environment defaults.
 
@@ -155,7 +153,7 @@ Explicit Python arguments and web settings override the shared model defaults fo
 
 Python is included in the executable. Ollama, its language-model weights, and optional Tesseract are separate installations. If no detector weights are included, first use requires an internet connection to download them. A manual installation uses `model/vX.Y.Z/gap_detection_model.pt` beside the EXE; `model/gap_detection_model.pt` alone is not searched.
 
-The executable bundles the web interface and fonts. It reads `.env` and keeps the detector model, consented feedback, and dataset contributions beside the EXE by default. Job files remain temporary. A one-file executable extracts its bundled libraries at startup, so opening it can take a little time; see [PyInstaller's one-file behavior](https://pyinstaller.org/en/stable/operating-mode.html#how-the-one-file-program-works).
+The executable bundles the web interface and fonts. It reads `.env` and keeps the detector model beside the EXE by default. Job files remain temporary. A one-file executable extracts its bundled libraries at startup, so opening it can take a little time; see [PyInstaller's one-file behavior](https://pyinstaller.org/en/stable/operating-mode.html#how-the-one-file-program-works).
 
 ## Build `solver.exe` and Publish a Release
 
@@ -259,17 +257,13 @@ Unresolved answers and text that exceeds the available space are shown as review
 
 Under **Adjust areas**, the editor also offers the original geometry, a rendered preview, manual 90°/180°/270° rotation, and an option to undo geometry correction. Geometry changes explicitly rerun detection and solving and replace the existing answers after confirmation.
 
-### Feedback and dataset contributions
+### Report errors on GitHub
 
-Use **Report error** on a result, in the editor, or beside a failed item. Reports are stored locally under `feedback/<report-id>/report.json`.
+Use **Report error** on a result, in the editor, or beside a failed item. It opens [a new GitHub issue](https://github.com/Hawk3388/solver/issues/new) in a separate browser tab, so feedback from self-hosted installations reaches the project repository.
 
-- Without image consent, only the error report and filename are stored persistently.
-- Image-storage consent includes the normalized worksheet and its annotation snapshot.
-- Training inclusion additionally requires agreement to use the image for training and confirmation that **all** detection areas and classes have been reviewed.
+Sign in to GitHub, describe the problem, add any worksheet or screenshot you choose to share, and submit the issue there. GitHub issues are public. The link does not send worksheet data, filenames, credentials, or annotations automatically, and the app does not need a GitHub token.
 
-Approved contributions create an image and YOLO labels under `dataset/images/{train,val}/` and `dataset/labels/{train,val}/`. The existing dataset class mapping and directory layout must match. Duplicate feedback images are detected; conflicting annotations are rejected for manual review. A stable image hash keeps repeated contributions in the same split.
-
-Text corrections are retained with consented reports, but detector training uses images and bounding boxes. Adding a sample does **not** automatically retrain the detector. Feedback and dataset files are persistent and are separate from expiring job files.
+Dataset contributions can be discussed in the issue and reviewed by the maintainer before inclusion. Opening or submitting an issue does not automatically update a training dataset or retrain the model.
 
 ### Available Settings
 
@@ -421,18 +415,17 @@ main.py
 
 | Path | Responsibility |
 | --- | --- |
-| `app.py` | FastAPI application factory and lifespan, job API, binary downloads, document edits, and feedback routes |
+| `app.py` | FastAPI application factory and lifespan, job API, binary downloads, and document edits |
 | `create_release.py` | PyInstaller build followed by a verified release ZIP with the latest local detector and SHA-256 checksum |
 | `requirements-build.txt` | CPU-only PyTorch pins and tools for the isolated release build |
-| `templates/index.html` | Semantic markup for the workspace, editor, and consent dialogs |
+| `templates/index.html` | Semantic markup for the workspace, editor, and GitHub report link |
 | `static/app.css` | Consolidated responsive styles, animation, and reduced-motion support |
-| `static/app.js` | Upload state, progress polling, editor interaction, previews, and feedback |
+| `static/app.js` | Upload state, progress polling, editor interaction, previews, and GitHub report links |
 | `worksheet_solver/config.py` | Shared environment configuration |
 | `worksheet_solver/answers.py` | Duplicate/missing/unknown answer-ID validation |
 | `worksheet_solver/jobs.py` | Bounded worker queue, item state, retention, and cleanup |
 | `worksheet_solver/web_processing.py` | Background normalization, detection, solving, and document creation |
 | `worksheet_solver/documents.py` | Editable document validation, previews, and rendering without AI |
-| `worksheet_solver/feedback.py` | Consent records, class-mapping checks, and deduplicated dataset insertion |
 | `main.py` | Public solver facade, model resolution, normalization orchestration, and CLI |
 | `worksheet_solver/images.py` | Safe decoding, EXIF handling, RGB conversion, resizing, rotation, and perspective correction |
 | `worksheet_solver/detection.py` | YOLO inference, overlap filtering, reading order, answer grouping, and debug marking |
@@ -457,13 +450,12 @@ The detector is cached by its resolved model path. A process-wide lock serialize
 | `GET /api/jobs/{job_id}/items/{item_id}/assets/{asset}` | Read an original, normalized image, result, or thumbnail |
 | `GET /api/jobs/{job_id}/items/{item_id}/download` | Download one completed PNG |
 | `GET /api/jobs/{job_id}/download` | Download multiple completed PNGs as ZIP |
-| `POST /api/jobs/{job_id}/items/{item_id}/feedback` | Submit a report and explicit storage/training consent |
 | `GET /docs` | Interactive API documentation |
 | `GET /openapi.json` | Machine-readable API schema |
 
 Opaque job IDs are access tokens for their files; do not share them unintentionally. Completed jobs expire after the configured inactivity window.
 
-Uploads are parsed with bounded file and field counts, and the total byte limit also applies to streamed requests without a `Content-Length` header. Multipart temporary files close after the queue has copied the uploads. File copying, rendering, feedback storage, and archive creation run outside the ASGI event loop. API errors retain the frontend's `{"error": "message"}` format, including validation errors (`400`), expired jobs (`404`), oversized requests (`413`), and a full queue (`429`).
+Uploads are parsed with bounded file and field counts, and the total byte limit also applies to streamed requests without a `Content-Length` header. Multipart temporary files close after the queue has copied the uploads. File copying, rendering, and archive creation run outside the ASGI event loop. API errors retain the frontend's `{"error": "message"}` format, including validation errors (`400`), expired jobs (`404`), oversized requests (`413`), and a full queue (`429`).
 
 ## Optional Gradio Demo
 
@@ -560,7 +552,7 @@ pip install pyinstaller
 pyinstaller solver.spec
 ```
 
-The executable is written to `dist/`. The specification bundles templates, static frontend assets, and the answer font. Keep `.env`, feedback, and dataset directories in a writable external location. Verify detector-model availability in the final distribution and never include a real API key in a release.
+The executable is written to `dist/`. The specification bundles templates, static frontend assets, and the answer font. Keep `.env` and detector weights in a writable external location. Verify detector-model availability in the final distribution and never include a real API key in a release.
 
 ## Troubleshooting
 

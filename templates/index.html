@@ -204,25 +204,10 @@
         </div>
         <footer class="dialog-footer">
             <span id="editor-message" role="status">Edits are rendered locally without another AI call.</span>
-            <button type="button" class="secondary-btn" id="editor-report">Report an error</button>
+            <a class="secondary-btn" id="editor-report" href="https://github.com/Hawk3388/solver/issues/new" target="_blank" rel="noopener noreferrer" title="Report an error on GitHub (opens a new tab)">Report an error</a>
             <button type="button" class="secondary-btn" id="editor-download">Download image</button>
             <button type="button" class="submit-btn" id="editor-save">Save changes</button>
         </footer>
-    </dialog>
-
-    <dialog class="feedback-dialog" id="feedback-dialog" aria-labelledby="feedback-title">
-        <header class="dialog-header">
-            <h2 id="feedback-title">Report a worksheet error</h2>
-            <button type="button" class="icon-button" id="feedback-close" aria-label="Close feedback"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-close"/></svg></button>
-        </header>
-        <p class="help-text">Describe what went wrong. Reports are saved on this server. Training contributions require corrected and reviewed detection areas.</p>
-        <label>What should be corrected?<textarea id="feedback-description" rows="5" minlength="5" maxlength="6000" placeholder="For example: the hint box was detected as an answer area."></textarea></label>
-        <label class="consent-row"><input type="checkbox" id="feedback-image"> I agree to save this worksheet image and its annotations with the report.</label>
-        <label class="consent-row"><input type="checkbox" id="feedback-training"> I agree to add this image and its corrected detection areas to the training dataset.</label>
-        <label class="consent-row"><input type="checkbox" id="feedback-reviewed"> I have reviewed all detection areas and classes, including missing and incorrectly detected areas.</label>
-        <p class="help-text">Text corrections help with review, but YOLO training uses images and boxes. Adding a sample does not automatically retrain the model.</p>
-        <div id="feedback-message" role="status"></div>
-        <button type="button" class="submit-btn" id="feedback-send">Send feedback</button>
     </dialog>
 
     <script src="{{ url_for('static', path='/app.js') }}" defer></script>

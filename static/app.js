@@ -13,7 +13,6 @@ let cardSignature = '';
 let busy = false;
 let limits = {max_files: 10, max_file_size: 10 * 1024 * 1024};
 let editor = null;
-let feedbackTarget = null;
 let modalFocus = null;
 
 async function api(url, options = {}) {
@@ -61,6 +60,18 @@ function button(label, action, className = 'secondary-btn') {
     return element;
 }
 
+function feedbackLink() {
+    const link = document.createElement('a');
+    const editorLink = $('editor-report');
+    link.className = 'secondary-btn';
+    link.href = editorLink.href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Report error';
+    link.title = 'Report an error on GitHub (opens a new tab)';
+    return link;
+}
+
 function warningText(warning) {
     return typeof warning === 'string' ? warning : warning.message;
 }
@@ -91,7 +102,7 @@ function imageCard(src, filename, fullSrc, downloadUrl, item = null) {
     actions.className = 'card-actions';
     if (item) {
         actions.append(button('Edit answers', () => openEditor(item)));
-        actions.append(button('Report error', () => openFeedback(item)));
+        actions.append(feedbackLink());
     } else {
         const choose = button('Change images', () => { if (!busy) fileInput.click(); }, 'secondary-btn choose-files-btn');
         choose.disabled = busy;
@@ -111,7 +122,7 @@ function openImageModal(src, filename, downloadUrl, item) {
     $('modal-actions').replaceChildren();
     if (item) {
         $('modal-actions').append(button('Edit answers', () => { closeImageModal(); return openEditor(item); }));
-        $('modal-actions').append(button('Report error', () => { closeImageModal(); openFeedback(item); }));
+        $('modal-actions').append(feedbackLink());
     }
     $('image-modal').classList.add('open');
     document.body.style.overflow = 'hidden';
@@ -184,7 +195,7 @@ function renderSnapshot(snapshot) {
         if (item.state === 'failed') {
             row.append(button('Retry', () => retryItem(item)));
             if (item.editable) row.append(button('Correct areas', () => openEditor(item)));
-            row.append(button('Report error', () => openFeedback(item)));
+            row.append(feedbackLink());
         }
         statuses.append(row);
     });
@@ -546,7 +557,6 @@ async function saveEditor() {
     $('editor-download').disabled = true;
     document.querySelector('.editor-controls').inert = true;
     document.querySelector('.editor-toolbar').inert = true;
-    $('editor-report').disabled = true;
     $('editor-save').disabled = true;
     $('editor-message').textContent = 'Rendering your changes…';
     try {
@@ -566,7 +576,6 @@ async function saveEditor() {
         $('editor-download').disabled = false;
         document.querySelector('.editor-controls').inert = false;
         document.querySelector('.editor-toolbar').inert = false;
-        $('editor-report').disabled = false;
         $('editor-save').disabled = false;
     }
 }
@@ -605,42 +614,6 @@ async function reprocessGeometry(restore) {
 }
 $('rotate-page').addEventListener('click', () => reprocessGeometry(false).catch(error => showError(error.message)));
 $('restore-page').addEventListener('click', () => reprocessGeometry(true).catch(error => showError(error.message)));
-
-function openFeedback(item) {
-    feedbackTarget = {jobId: currentJob, item};
-    $('feedback-description').value = '';
-    for (const id of ['feedback-image', 'feedback-training', 'feedback-reviewed']) $(id).checked = false;
-    $('feedback-training').disabled = !item.editable;
-    $('feedback-reviewed').disabled = !item.editable;
-    $('feedback-message').textContent = '';
-    $('feedback-send').disabled = false;
-    $('feedback-dialog').showModal();
-}
-$('editor-report').addEventListener('click', async () => {
-    if (editor?.dirty && !(await saveEditor())) return;
-    const item = currentSnapshot.items.find(item => item.id === editor.item.id);
-    openFeedback(item);
-});
-$('feedback-close').addEventListener('click', () => $('feedback-dialog').close());
-$('feedback-send').addEventListener('click', async () => {
-    if (!feedbackTarget) return;
-    const target = feedbackTarget;
-    const payload = {description: $('feedback-description').value.trim(), store_image: $('feedback-image').checked,
-        add_to_training: $('feedback-training').checked, annotations_reviewed: $('feedback-reviewed').checked,
-        document_version: target.item.editable ? target.item.revision : null};
-    if (payload.description.length < 5) { $('feedback-message').textContent = 'Please describe the error in at least five characters.'; return; }
-    if (payload.add_to_training && !(payload.store_image && payload.annotations_reviewed)) {
-        $('feedback-message').textContent = 'Training inclusion requires both image-storage consent and confirmation that all areas were reviewed.'; return;
-    }
-    $('feedback-send').disabled = true;
-    let sent = false;
-    try {
-        const response = await api(`/api/jobs/${target.jobId}/items/${target.item.id}/feedback`, jsonOptions('POST', payload));
-        $('feedback-message').textContent = response.added_to_training ? 'Thank you. The reviewed image and labels were added to the local training dataset.' : 'Thank you. Your error report was saved for review.';
-        sent = true;
-    } catch (error) { $('feedback-message').textContent = error.message; }
-    finally { $('feedback-send').disabled = sent; }
-});
 
 function toggleSettings() {
     const open = $('settings-panel').classList.toggle('open');
