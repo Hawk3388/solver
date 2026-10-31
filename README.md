@@ -178,7 +178,7 @@ The CPU build is suitable for distributing the YOLO detector without CUDA librar
 
 ### 2. Build using `solver.spec`
 
-Stop any previously built executable before rebuilding, then run:
+To build only the executable, stop any previously built executable and run the command below. If you want the complete release ZIP, go directly to step 3; its script performs this build automatically.
 
 ```powershell
 .\.venv-build\Scripts\python.exe -m PyInstaller --clean --noconfirm solver.spec
@@ -188,23 +188,29 @@ The output is **`dist/solver.exe`**. Build intermediates and diagnostics are wri
 
 The spec does not embed detector weights, Ollama models, `.env`, feedback, or the training dataset. Keep your private `.env` out of every release archive.
 
-### 3. Assemble `solver.zip`
+### 3. Build and assemble `solver.zip`
 
-Run the packaging script after building the executable:
+Stop any running `solver.exe`, then run the release script with the Python environment containing the project requirements and PyInstaller:
 
 ```powershell
-python create_release.py
+.\.venv-build\Scripts\python.exe create_release.py
 ```
 
-[`create_release.py`](create_release.py) uses only the Python standard library. It takes `dist/solver.exe` (falling back to `solver/solver.exe`), the current repository's README, license and `.env.example`, and the newest available `model/vX.Y.Z/gap_detection_model.pt`. Versions are sorted numerically, so `v1.10.0` is newer than `v1.9.0`.
+[`create_release.py`](create_release.py) first runs PyInstaller with `solver.spec` using the same Python interpreter as the script. It builds into a temporary output folder, then replaces `dist/solver.exe` only after a successful build. It packages that newly built executable, the current repository's README, license and `.env.example`, and the newest available `model/vX.Y.Z/gap_detection_model.pt`. Versions are sorted numerically, so `v1.10.0` is newer than `v1.9.0`.
 
-The output is `dist/solver.zip` and its `dist/solver.zip.sha256` checksum. The script verifies the ZIP before replacing the destination and includes only the five release files. It does not build the EXE, modify the existing `solver/` folder, or include private `.env` files and datasets.
+The output is `dist/solver.exe`, `dist/solver.zip`, and its `dist/solver.zip.sha256` checksum. The script verifies the ZIP before replacing the destination and includes only the five release files. Build failures stop packaging and preserve the previous executable and ZIP. The existing `solver/` folder, private `.env` files, and datasets are not included or modified.
 
-To replace an existing archive, select another executable, or change the output path:
+Use `--force` to replace an existing archive. When the build environment is activated, the commands can be shortened to:
 
 ```powershell
 python create_release.py --force
-python create_release.py --exe .\dist\solver.exe --output .\solver.zip
+python create_release.py --output .\solver.zip
+```
+
+For an explicitly requested packaging-only run, use `--skip-build`. An optional `--exe` is accepted only with this switch; otherwise the freshly built EXE is always used:
+
+```powershell
+python create_release.py --skip-build --exe .\dist\solver.exe --force
 ```
 
 With detector version `v1.2.1`, the archive has this layout:
@@ -423,7 +429,7 @@ main.py
 | Path | Responsibility |
 | --- | --- |
 | `app.py` | FastAPI application factory and lifespan, job API, binary downloads, document edits, and feedback routes |
-| `create_release.py` | Verified Windows release ZIP with the latest local detector and SHA-256 checksum |
+| `create_release.py` | PyInstaller build followed by a verified release ZIP with the latest local detector and SHA-256 checksum |
 | `templates/index.html` | Semantic markup for the workspace, editor, and consent dialogs |
 | `static/app.css` | Consolidated responsive styles, animation, and reduced-motion support |
 | `static/app.js` | Upload state, progress polling, editor interaction, previews, and feedback |
